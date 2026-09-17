@@ -90,12 +90,13 @@ Add Python to PATH
 is enabled.
 
 After installing Python, verify that it is working by opening Command Prompt and running:
-
+```
 python --version
-
+```
 If that does not work, try:
-
+```
 py --version
+```
 Step 2 — Download V.E.D.A.
 
 Download the V.E.D.A. application package from the provided Google Drive folder:
@@ -110,18 +111,19 @@ Extract the contents of the downloaded package.
 Choose any preferred folder/location on your Windows PC.
 Make sure the complete V.E.D.A. package remains together.
 Do not remove required files from the extracted folder.
+
 Step 4 — Build and Verify Dependencies
 
 Before launching V.E.D.A., you must run the build process.
 
 Normally, run:
-
+```
 BUILD V.E.D.A.bat
-
+```
 or:
-
+```
 build.bat
-
+```
 The build process installs and verifies the important dependencies and components required by V.E.D.A.
 
 An internet connection is required during the build/dependency installation process.
@@ -131,23 +133,23 @@ Wait for the build process to finish successfully before launching V.E.D.A.
 🔧 If the BAT Build File Does Not Work
 
 If:
-
+```
 BUILD V.E.D.A.bat
-
+```
 or:
-
+```
 build.bat
-
+```
 does not work correctly, you can run the Python build script directly.
 
 Open the V.E.D.A. folder and run:
-
+```
 python build.py
-
+```
 If python is not recognized, try:
-
+```
 py build.py
-
+```
 Allow the build process to complete before launching V.E.D.A.
 
 Step 5 — Launch V.E.D.A.
