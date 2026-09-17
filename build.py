@@ -29,7 +29,10 @@ REQUIRED_PACKAGES = [
     "pywin32",
     "numpy",
     "azure-cognitiveservices-speech",
-    "mediapipe"
+    "mediapipe",
+    "kokoro-onnx",
+    "soundfile",
+    "pygame"
 ]
 
 def print_banner(title: str):
@@ -237,6 +240,10 @@ def run_build():
         "--collect-all", "cv2",
         "--collect-all", "azure.cognitiveservices.speech",
         "--collect-all", "mediapipe",
+        "--collect-all", "kokoro_onnx",
+        "--collect-all", "onnxruntime",
+        "--collect-all", "soundfile",
+        "--collect-all", "pygame",
         "--add-data", "veda/models/hand_landmarker.task;veda/models",
         "--hidden-import", "google.genai",
         "--hidden-import", "PIL",
@@ -248,6 +255,17 @@ def run_build():
         "--hidden-import", "pycaw",
         "--hidden-import", "win32api",
         "--hidden-import", "win32com.client",
+        "--hidden-import", "win32crypt",
+        "--hidden-import", "kokoro_onnx",
+        "--hidden-import", "onnxruntime",
+        "--hidden-import", "soundfile",
+        "--hidden-import", "pygame",
+        "--hidden-import", "veda.version",
+        "--hidden-import", "veda.security",
+        "--hidden-import", "veda.updater",
+        "--hidden-import", "veda.standalone_updater",
+        "--hidden-import", "veda.notifications",
+        "--hidden-import", "veda.kokoro_provider",
         str(main_py)
     ]
 

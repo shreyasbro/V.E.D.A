@@ -1,0 +1,26 @@
+// Vercel Serverless Function: GET /api/latest
+export default function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+  const manifest = {
+    version: "1.0.0",
+    build: 1000,
+    mandatory: false,
+    title: "V.E.D.A. 1.0.0",
+    release_date: "2026-09-17",
+    release_notes: [
+      "Production Vercel OTA Update Engine",
+      "In-App Notification Center with dynamic status badges",
+      "User-owned AI Provider architecture with zero preloaded keys",
+      "Windows DPAPI local encrypted credential storage",
+      "Standalone process updater with automatic rollback"
+    ],
+    download_url: "https://github.com/VEDA-Assistant/VEDA/releases/download/v1.0.0/VEDA-1.0.0.exe",
+    sha256: "SHA256_HASH_HERE",
+    size_bytes: 0,
+    minimum_supported_version: "1.0.0"
+  };
+
+  res.status(200).json(manifest);
+}

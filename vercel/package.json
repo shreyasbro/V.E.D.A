@@ -1,0 +1,8 @@
+{
+  "name": "veda-ota-server",
+  "version": "1.0.0",
+  "description": "V.E.D.A. Production OTA Update Manifest Host",
+  "scripts": {
+    "start": "vercel dev"
+  }
+}

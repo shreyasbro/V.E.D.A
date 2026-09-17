@@ -26,6 +26,16 @@ def show_fatal_error(msg: str):
         print(f"[FATAL STARTUP ERROR]\n{msg}", file=sys.stderr)
 
 def main():
+    if "--verify-launch" in sys.argv:
+        # Quick headless self-test for updater verification
+        try:
+            from veda import version
+            print(f"V.E.D.A. {version.VERSION} (build {version.BUILD}) verification successful.")
+            sys.exit(0)
+        except Exception as e:
+            print(f"Verification failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
     try:
         from veda.ui import VedaApp
         app = VedaApp()
