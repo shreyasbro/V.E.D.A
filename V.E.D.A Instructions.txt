@@ -1,0 +1,15 @@
+V.E.D.A. (Virtual Executive Desktop Assistant) Installation & User Guide
+
+1. INSTALLATION:
+- Download the V.E.D.A. application package from the Google Drive link provided:
+  https://drive.google.com/drive/folders/1nqnjiPY1IRwolYZNuxkpFuP_VHTm7Ja0?usp=drive_link
+- Extract the contents to your preferred directory on your Windows PC.
+- Ensure all required dependencies and environment files are properly placed.
+
+2. HOW TO USE:
+- Launch the main V.E.D.A. executable.
+- Before you run, you must run the build file (BUILD V.E.D.A.bat or build.bat) to install and verify all important dependencies and components (Internet connection is required).
+- Interact with V.E.D.A. using natural language (English, Hindi, or Hinglish).
+- You can ask V.E.D.A. to open apps, type text, take screenshots, manage files, and automate desktop tasks.
+
+Created by Shreyas.

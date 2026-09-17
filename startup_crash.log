@@ -1,0 +1,11 @@
+V.E.D.A. encountered an error during startup:
+
+Traceback (most recent call last):
+  File "E:\V.E.D.A\main.py", line 30, in main
+    from veda.ui import VedaApp
+  File "E:\V.E.D.A\veda\ui.py", line 18, in <module>
+    from veda.api_manager import api_manager, mask_key, PRESET_TEMPLATES
+  File "E:\V.E.D.A\veda\api_manager.py", line 161
+    def subscribe(self, callback: Callable[[str, Dict[str, Any]], None]):
+                                                                         ^
+IndentationError: unindent does not match any outer indentation level
