@@ -29,9 +29,9 @@ V.E.D.A. is intended to act as a practical desktop assistant rather than simply 
 
 ---
 
-## 🚀 Main Features
+# 🚀 Main Features
 
-### 🖥️ Windows Desktop Interaction
+## 🖥️ Windows Desktop Interaction
 
 V.E.D.A. can interact with the Windows desktop and perform various desktop-related operations.
 
@@ -46,7 +46,7 @@ Supported tasks include:
 
 ---
 
-### 🤖 Natural-Language Interaction
+## 🤖 Natural-Language Interaction
 
 You don't need to remember complicated commands.
 
@@ -58,46 +58,62 @@ V.E.D.A. supports:
 - Hindi
 - Hinglish
 
-Examples:
+### Examples
 
 ```text
 Open Chrome
-
 Take a screenshot
-
 Open my files
-
 Type this message
-
 Open an application
-
 Automate this desktop task
 
-The idea is to make computer interaction feel more natural and straightforward.
+The idea is to make computer interaction more natural and straightforward.
 
 📦 Installation
 
 V.E.D.A. is currently distributed as a Windows application package.
 
-Step 1 — Download V.E.D.A.
+Step 1 — Install Python
+
+Before installing and running V.E.D.A., make sure that the latest available version of Python is installed on your Windows PC.
+
+Download Python from:
+
+https://www.python.org/downloads/
+
+During the Python installation, make sure that:
+
+Add Python to PATH
+
+is enabled.
+
+After installing Python, verify that it is working by opening Command Prompt and running:
+
+python --version
+
+If that does not work, try:
+
+py --version
+Step 2 — Download V.E.D.A.
 
 Download the V.E.D.A. application package from the provided Google Drive folder:
 
 https://drive.google.com/drive/folders/1nqnjiPY1IRwolYZNuxkpFuP_VHTm7Ja0?usp=drive_link
 
-Step 2 — Extract the Application
+Step 3 — Extract the Application
 
 After downloading the package:
 
 Extract the contents of the downloaded package.
-Choose any folder/location on your Windows PC.
+Choose any preferred folder/location on your Windows PC.
 Make sure the complete V.E.D.A. package remains together.
 Do not remove required files from the extracted folder.
-Step 3 — Build and Verify Dependencies
+Step 4 — Build and Verify Dependencies
 
-Before launching V.E.D.A., you must run the build file.
+Before launching V.E.D.A., you must run the build process.
 
-Depending on the package, run:
+Normally, run:
 
 BUILD V.E.D.A.bat
 
@@ -105,13 +121,35 @@ or:
 
 build.bat
 
-The build process is responsible for installing and verifying the important dependencies and components required by V.E.D.A.
+The build process installs and verifies the important dependencies and components required by V.E.D.A.
 
-Internet connection is required during the build process.
+An internet connection is required during the build/dependency installation process.
 
-Allow the build process to complete before launching the main application.
+Wait for the build process to finish successfully before launching V.E.D.A.
 
-Step 4 — Launch V.E.D.A.
+🔧 If the BAT Build File Does Not Work
+
+If:
+
+BUILD V.E.D.A.bat
+
+or:
+
+build.bat
+
+does not work correctly, you can run the Python build script directly.
+
+Open the V.E.D.A. folder and run:
+
+python build.py
+
+If python is not recognized, try:
+
+py build.py
+
+Allow the build process to complete before launching V.E.D.A.
+
+Step 5 — Launch V.E.D.A.
 
 After the build process has completed successfully, launch the main V.E.D.A. executable.
 
@@ -122,10 +160,13 @@ V.E.D.A. should then be ready for interaction.
 Before running V.E.D.A., make sure that:
 
 You are using a Windows PC.
+The latest available Python version is installed.
+Python is added to your system PATH.
 The complete V.E.D.A. application package has been extracted.
 Required environment files are present.
 Required dependencies are available.
-BUILD V.E.D.A.bat or build.bat has been executed.
+BUILD V.E.D.A.bat or build.bat has been executed successfully.
+If the BAT build file does not work, run python build.py or py build.py.
 Your PC has an active internet connection during the build/dependency installation process.
 
 If the build process has not been completed, V.E.D.A. may not start or function correctly.
@@ -247,7 +288,9 @@ An Android version/companion experience is part of the broader V.E.D.A. directio
 
 The Android side is intended to provide a way to interact with and control the Windows V.E.D.A. system from an Android device.
 
-However, the current installation instructions specifically provided for this project describe the Windows installation process. Android installation and connection instructions will be documented separately when the Android build and connection workflow are finalized.
+The current documented installation process is for the Windows version.
+
+Android installation and connection instructions will be documented separately when the Android build and connection workflow are finalized.
 
 🔧 Build File
 
@@ -261,6 +304,14 @@ or:
 
 build.bat
 
+If the BAT file does not work, use:
+
+python build.py
+
+or:
+
+py build.py
+
 The build process installs and verifies important dependencies and components.
 
 An internet connection is required for this process.
@@ -271,19 +322,23 @@ Always make sure the build step has been completed first.
 
 Recommended order:
 
-1. Download V.E.D.A.
+1. Install the latest Python version
         ↓
-2. Extract the package
+2. Download V.E.D.A.
         ↓
-3. Check required files
+3. Extract the package
         ↓
-4. Run BUILD V.E.D.A.bat / build.bat
+4. Check the required files
         ↓
-5. Allow dependencies to install and verify
+5. Run BUILD V.E.D.A.bat / build.bat
         ↓
-6. Launch V.E.D.A.
+6. If the BAT file fails, run build.py
         ↓
-7. Give V.E.D.A. a natural-language command
+7. Allow dependencies to install and verify
+        ↓
+8. Launch V.E.D.A.
+        ↓
+9. Give V.E.D.A. a natural-language command
 🖥️ Platform
 
 Current documented platform:
@@ -308,6 +363,66 @@ English, Hindi, and Hinglish support
 
 More functionality can be added and improved as development continues.
 
+🚧 Development Status
+
+V.E.D.A. is currently under active development.
+
+The project is still being developed, tested, and improved. Because of this, users may encounter:
+
+Bugs
+Unexpected behavior
+Incomplete features
+Crashes
+Compatibility issues
+Performance differences between PCs
+
+Different Windows PCs may behave differently depending on factors such as:
+
+Windows version
+Hardware
+Drivers
+Permissions
+Installed dependencies
+System configuration
+
+This is not yet a final/stable release.
+
+Features may change, improve, or be replaced as development continues.
+
+If you are using V.E.D.A. during this development stage, please keep in mind that bugs are expected.
+
+🐛 Bug Reports & Feedback
+
+If you find a bug or something that does not work correctly, please report it.
+
+When reporting a bug, include as much useful information as possible.
+
+For example:
+
+Bug:
+What happened?
+
+Expected:
+What should have happened?
+
+Steps to reproduce:
+1.
+2.
+3.
+
+Windows Version:
+V.E.D.A. Version:
+Error Message:
+Additional Information:
+
+Screenshots, error messages, and relevant logs can also help identify and fix problems.
+
+You can report bugs or send feedback at:
+
+thakurshreyas436@gmail.com
+
+Your feedback helps improve V.E.D.A. during development.
+
 👨‍💻 Created By
 
 Shreyas
@@ -318,36 +433,13 @@ Built with the goal of making computer interaction simpler, more natural, and mo
 
 📜 Disclaimer
 
-# 🚧 Development Status
-
-V.E.D.A. is currently **under active development**.
-
-This project is still being developed, tested, and improved, so you may encounter **bugs, unexpected behavior, incomplete features, crashes, or compatibility issues** while using it.
-
-Different PCs may also behave differently depending on Windows version, hardware, drivers, permissions, dependencies, and system configuration.
-
-If you find a bug or something that doesn't work correctly, please report it through the repository's **Issues** section. Bug reports and feedback will help improve V.E.D.A. during development.
-
-### ⚠️ Please Keep in Mind
-
-- V.E.D.A. is **not yet a final/stable release**.
-- Some features may still be incomplete.
-- Some features may change during development.
-- Bugs and crashes may occur.
-- Performance may vary between different PCs.
-- Hardware and Windows compatibility may vary.
-- Updates may introduce new features, changes, or fixes.
-
-If you are using V.E.D.A. at this stage, you are using a project that is still actively being built and improved.
-
-**Found a bug? Please report it. Your feedback helps make V.E.D.A. better.**
-
-Report at thakurshreyas436@gmail.com
+V.E.D.A. is an actively developed project, and functionality may change between versions.
 
 Always use the latest available version and follow the installation instructions included with the current release.
 
-V.E.D.A.
+V.E.D.A. is currently under development, so bugs and unexpected behavior may occur.
 
+V.E.D.A.
 Virtual Executive Desktop Assistant
 
 Talk to your computer.
