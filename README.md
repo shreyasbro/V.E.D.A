@@ -60,7 +60,7 @@ V.E.D.A. supports:
 
 ### Examples
 
-```text
+```
 Open Chrome
 Take a screenshot
 Open my files
@@ -69,7 +69,8 @@ Open an application
 Automate this desktop task
 
 The idea is to make computer interaction more natural and straightforward.
-
+```
+---
 📦 Installation
 
 V.E.D.A. is currently distributed as a Windows application package.
@@ -79,9 +80,9 @@ Step 1 — Install Python
 Before installing and running V.E.D.A., make sure that the latest available version of Python is installed on your Windows PC.
 
 Download Python from:
-
+```
 https://www.python.org/downloads/
-
+```
 During the Python installation, make sure that:
 
 Add Python to PATH
@@ -98,9 +99,9 @@ py --version
 Step 2 — Download V.E.D.A.
 
 Download the V.E.D.A. application package from the provided Google Drive folder:
-
+```
 https://drive.google.com/drive/folders/1nqnjiPY1IRwolYZNuxkpFuP_VHTm7Ja0?usp=drive_link
-
+```
 Step 3 — Extract the Application
 
 After downloading the package:
@@ -154,7 +155,7 @@ Step 5 — Launch V.E.D.A.
 After the build process has completed successfully, launch the main V.E.D.A. executable.
 
 V.E.D.A. should then be ready for interaction.
-
+---
 🛠️ Important Installation Notes
 
 Before running V.E.D.A., make sure that:
@@ -177,14 +178,14 @@ Once V.E.D.A. has been launched, interact with it using natural language.
 
 You don't have to use a fixed command format.
 
-For example:
-
+#For example:
+```
 Open Chrome
-
+```
 V.E.D.A. can process the request and perform the corresponding desktop action.
 
-Another example:
-
+#Another example:
+```
 Take a screenshot
 
 Or:
@@ -192,30 +193,30 @@ Or:
 Open my files
 
 You can also use Hindi or Hinglish.
-
-For example:
-
+```
+#For example:
+```
 Chrome open karo
 Ek screenshot le lo
 Meri files open karo
 Ye text type karo
-
+```
 The purpose is to allow users to interact with their computer in the language and style that feels natural to them.
-
-🧩 Desktop Automation
+---
+#🧩 Desktop Automation
 
 V.E.D.A. can be used for desktop automation tasks.
 
 Instead of manually performing a sequence of actions, you can describe the task to V.E.D.A.
 
 Examples include:
-
+```
 Open the application
 Type this text
 Take a screenshot
 Open my files
 Perform this desktop task
-
+```
 V.E.D.A. is designed to make these interactions easier through natural-language instructions.
 
 📸 Screenshots
@@ -225,9 +226,9 @@ V.E.D.A. supports screenshot-related tasks.
 You can ask V.E.D.A. to take a screenshot when needed.
 
 Example:
-
+```
 Take a screenshot
-
+```
 This can be useful when you need to capture the current state of your Windows desktop.
 
 📁 File Management
@@ -237,22 +238,22 @@ V.E.D.A. can assist with file-management tasks.
 You can give natural-language instructions related to managing files on your Windows computer.
 
 For example:
-
+```
 Open my files
 Manage my files
-
+```
 The exact operation depends on the task you provide to V.E.D.A.
-
+---
 ⌨️ Text Input
 
 V.E.D.A. can type text on your computer when requested.
 
 For example:
-
+```
 Type this message
-
+```
 This allows text-entry tasks to be performed through natural-language instructions rather than manually typing everything yourself.
-
+---
 🧠 Designed Around Natural Interaction
 
 One of the main ideas behind V.E.D.A. is reducing the need for complicated command syntax.
@@ -260,20 +261,21 @@ One of the main ideas behind V.E.D.A. is reducing the need for complicated comma
 Instead of learning a large list of special commands, users can communicate with V.E.D.A. naturally.
 
 For example:
-
+```
 Open Chrome
-
+```
 is intended to be enough to communicate the task.
 
 The same principle applies to Hindi and Hinglish:
-
+```
 Chrome open karo
 
 or:
 
 Screenshot le lo
+```
 🌐 Language Support
-
+---
 V.E.D.A. currently supports natural-language interaction in:
 
 English
@@ -281,7 +283,7 @@ Hindi
 Hinglish
 
 This allows users to interact with V.E.D.A. without being restricted to English-only commands.
-
+---
 📱 Android
 
 An Android version/companion experience is part of the broader V.E.D.A. direction.
@@ -291,7 +293,7 @@ The Android side is intended to provide a way to interact with and control the W
 The current documented installation process is for the Windows version.
 
 Android installation and connection instructions will be documented separately when the Android build and connection workflow are finalized.
-
+---
 🔧 Build File
 
 The V.E.D.A. package includes a build process that should be run before starting the application.
@@ -346,7 +348,7 @@ Current documented platform:
 Windows PC
 
 V.E.D.A. is currently distributed as a Windows desktop application package.
-
+---
 📌 Project Status
 
 V.E.D.A. is an actively developed personal desktop-assistant project.
@@ -362,7 +364,7 @@ Desktop automation
 English, Hindi, and Hinglish support
 
 More functionality can be added and improved as development continues.
-
+---
 🚧 Development Status
 
 V.E.D.A. is currently under active development.
@@ -390,7 +392,7 @@ This is not yet a final/stable release.
 Features may change, improve, or be replaced as development continues.
 
 If you are using V.E.D.A. during this development stage, please keep in mind that bugs are expected.
-
+---
 🐛 Bug Reports & Feedback
 
 If you find a bug or something that does not work correctly, please report it.
@@ -422,7 +424,7 @@ You can report bugs or send feedback at:
 thakurshreyas436@gmail.com
 
 Your feedback helps improve V.E.D.A. during development.
-
+---
 👨‍💻 Created By
 
 Shreyas
@@ -430,7 +432,7 @@ Shreyas
 V.E.D.A. — Virtual Executive Desktop Assistant
 
 Built with the goal of making computer interaction simpler, more natural, and more accessible.
-
+---
 📜 Disclaimer
 
 V.E.D.A. is an actively developed project, and functionality may change between versions.
@@ -444,3 +446,4 @@ Virtual Executive Desktop Assistant
 
 Talk to your computer.
 Let V.E.D.A. handle the task.
+---
