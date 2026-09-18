@@ -17,14 +17,14 @@ It is a desktop-based assistant designed to make interaction with a Windows comp
 Instead of navigating through multiple menus or manually performing repetitive actions, you can give V.E.D.A. a natural-language instruction.
 
 For example:
-
+```
 - "Open Chrome"
 - "Take a screenshot"
 - "Type this message"
 - "Open this application"
 - "Manage my files"
 - "Automate this desktop task"
-
+```
 V.E.D.A. is intended to act as a practical desktop assistant rather than simply being a text-based chatbot.
 
 ---
@@ -36,14 +36,14 @@ V.E.D.A. is intended to act as a practical desktop assistant rather than simply 
 V.E.D.A. can interact with the Windows desktop and perform various desktop-related operations.
 
 Supported tasks include:
-
+```
 - Opening applications
 - Typing text
 - Taking screenshots
 - Managing files
 - Performing desktop automation
 - Executing natural-language desktop commands
-
+```
 ---
 
 ## 🤖 Natural-Language Interaction
