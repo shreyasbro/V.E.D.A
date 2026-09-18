@@ -2051,8 +2051,8 @@ class VedaApp(ctk.CTk):
         settings_win = ctk.CTkToplevel(self)
         self._settings_window = settings_win
         settings_win.title("V.E.D.A. — Configuration & Settings Center")
-        settings_win.geometry("780x740")
-        settings_win.minsize(720, 580)
+        settings_win.geometry("820x750")
+        settings_win.minsize(640, 480)
         settings_win.configure(fg_color="#07090e")
         settings_win.attributes("-topmost", True)
 
@@ -2115,8 +2115,31 @@ class VedaApp(ctk.CTk):
         ]
 
         # Tab Navigation Strip (Segmented buttons container)
-        nav_bar = ctk.CTkFrame(body_frame, fg_color="#0b101b", height=42, corner_radius=8, border_width=1, border_color="#1e293b")
-        nav_bar.pack(fill="x", pady=(0, 8))
+        # Tab Navigation Strip (Segmented buttons container with smooth horizontal scroll on narrow viewports)
+        nav_bar_container = ctk.CTkFrame(body_frame, fg_color="#0b101b", height=44, corner_radius=8, border_width=1, border_color="#1e293b")
+        nav_bar_container.pack(fill="x", pady=(0, 8))
+        nav_bar_container.pack_propagate(False)
+
+        nav_canvas = tk.Canvas(nav_bar_container, bg="#0b101b", highlightthickness=0, bd=0, height=38)
+        nav_canvas.pack(fill="both", expand=True, padx=4, pady=3)
+
+        nav_inner = ctk.CTkFrame(nav_canvas, fg_color="transparent")
+        nav_window_id = nav_canvas.create_window((0, 0), window=nav_inner, anchor="nw")
+
+        def _update_nav_scroll_region(event=None):
+            nav_canvas.configure(scrollregion=nav_canvas.bbox("all"))
+
+        nav_inner.bind("<Configure>", _update_nav_scroll_region)
+        nav_canvas.bind("<Configure>", lambda e: nav_canvas.itemconfig(nav_window_id, height=e.height))
+
+        def _on_nav_wheel(event):
+            if nav_inner.winfo_reqwidth() > nav_canvas.winfo_width():
+                delta = event.delta if event.delta else (-120 if event.num == 5 else 120)
+                nav_canvas.xview_scroll(-1 if delta > 0 else 1, "units")
+                return "break"
+
+        nav_canvas.bind("<MouseWheel>", _on_nav_wheel)
+        nav_inner.bind("<MouseWheel>", _on_nav_wheel)
 
         # Content frame host
         content_host = ctk.CTkFrame(body_frame, fg_color="#0b101b", corner_radius=10, border_width=1, border_color="#1e293b")
@@ -2124,10 +2147,21 @@ class VedaApp(ctk.CTk):
 
         tab_frames = {}
         tab_buttons = {}
+        active_tab_ref = {"id": "General", "frame": None}
 
-        # Pre-create dedicated scrollable frame for each tab
+        # Pre-create dedicated scrollable frame for each tab with customized futuristic scrollbar
         for tab_id, _ in tab_names:
-            sf = ctk.CTkScrollableFrame(content_host, fg_color="transparent")
+            sf = ctk.CTkScrollableFrame(
+                content_host,
+                fg_color="transparent",
+                scrollbar_fg_color="#080c14",
+                scrollbar_button_color="#0284c7",
+                scrollbar_button_hover_color="#38bdf8"
+            )
+            try:
+                sf._scrollbar.configure(width=8)
+            except Exception:
+                pass
             tab_frames[tab_id] = sf
 
         def switch_to_tab(selected_id):
@@ -2137,6 +2171,9 @@ class VedaApp(ctk.CTk):
                 if tid.lower() == selected_id.lower() or selected_id.lower() in tid.lower():
                     matched_id = tid
                     break
+
+            active_tab_ref["id"] = matched_id
+            active_tab_ref["frame"] = tab_frames.get(matched_id)
 
             for tid, frame in tab_frames.items():
                 if tid == matched_id:
@@ -2150,12 +2187,62 @@ class VedaApp(ctk.CTk):
                 else:
                     btn.configure(fg_color="#1e293b", text_color="#94a3b8")
 
+            # Scroll selected tab button into view if navigation bar overflows
+            btn_target = tab_buttons.get(matched_id)
+            if btn_target and nav_inner.winfo_reqwidth() > nav_canvas.winfo_width():
+                try:
+                    btn_x = btn_target.winfo_x()
+                    btn_w = btn_target.winfo_width()
+                    total_w = nav_inner.winfo_reqwidth()
+                    if total_w > 0:
+                        nav_canvas.xview_moveto(max(0.0, min(1.0, (btn_x - 10) / total_w)))
+                except Exception:
+                    pass
+
         settings_win._switch_tab = switch_to_tab
 
-        # Build responsive navigation buttons in nav_bar
+        # Keyboard Navigation Handlers for Settings Content Area
+        def _on_key_page_up(e):
+            if isinstance(e.widget, (tk.Entry, tk.Text, ctk.CTkEntry)):
+                return
+            curr_sf = active_tab_ref.get("frame")
+            if curr_sf and hasattr(curr_sf, "_parent_canvas"):
+                curr_sf._parent_canvas.yview_scroll(-1, "pages")
+                return "break"
+
+        def _on_key_page_down(e):
+            if isinstance(e.widget, (tk.Entry, tk.Text, ctk.CTkEntry)):
+                return
+            curr_sf = active_tab_ref.get("frame")
+            if curr_sf and hasattr(curr_sf, "_parent_canvas"):
+                curr_sf._parent_canvas.yview_scroll(1, "pages")
+                return "break"
+
+        def _on_key_home(e):
+            if isinstance(e.widget, (tk.Entry, tk.Text, ctk.CTkEntry)):
+                return
+            curr_sf = active_tab_ref.get("frame")
+            if curr_sf and hasattr(curr_sf, "_parent_canvas"):
+                curr_sf._parent_canvas.yview_moveto(0.0)
+                return "break"
+
+        def _on_key_end(e):
+            if isinstance(e.widget, (tk.Entry, tk.Text, ctk.CTkEntry)):
+                return
+            curr_sf = active_tab_ref.get("frame")
+            if curr_sf and hasattr(curr_sf, "_parent_canvas"):
+                curr_sf._parent_canvas.yview_moveto(1.0)
+                return "break"
+
+        settings_win.bind("<Prior>", _on_key_page_up)
+        settings_win.bind("<Next>", _on_key_page_down)
+        settings_win.bind("<Home>", _on_key_home)
+        settings_win.bind("<End>", _on_key_end)
+
+        # Build responsive navigation buttons inside nav_inner
         for tid, label in tab_names:
             btn = ctk.CTkButton(
-                nav_bar,
+                nav_inner,
                 text=label,
                 font=ctk.CTkFont(family="Consolas", size=10, weight="bold"),
                 fg_color="#1e293b",
@@ -2165,7 +2252,8 @@ class VedaApp(ctk.CTk):
                 corner_radius=6,
                 command=lambda t=tid: switch_to_tab(t)
             )
-            btn.pack(side="left", fill="x", expand=True, padx=3, pady=6)
+            btn.pack(side="left", padx=3, pady=4)
+            btn.bind("<MouseWheel>", _on_nav_wheel)
             tab_buttons[tid] = btn
 
         # ====================================================
@@ -2268,6 +2356,22 @@ class VedaApp(ctk.CTk):
         txt_notes = ctk.CTkTextbox(card_notes, fg_color="#05080e", font=ctk.CTkFont(family="Consolas", size=10), text_color="#e2e8f0", height=100)
         txt_notes.pack(fill="x", padx=14, pady=(0, 10))
         txt_notes.insert("end", "Check GitHub releases to view latest changelog.\n")
+
+        # Ensure mousewheel on notes bubbles up to the tab scroll container when bounds reached
+        def _on_notes_mousewheel(e):
+            try:
+                first, last = txt_notes._textbox.yview()
+                if (e.delta > 0 and first <= 0.0) or (e.delta < 0 and last >= 1.0):
+                    if hasattr(scroll_updates_tab, "_parent_canvas"):
+                        scroll_updates_tab._parent_canvas.yview_scroll(-int(e.delta / 6), "units")
+                        return "break"
+            except Exception:
+                pass
+
+        try:
+            txt_notes._textbox.bind("<MouseWheel>", _on_notes_mousewheel)
+        except Exception:
+            pass
 
         def _update_notes_display():
             txt_notes.delete("1.0", "end")
