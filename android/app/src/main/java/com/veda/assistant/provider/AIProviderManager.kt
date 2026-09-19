@@ -2,6 +2,7 @@ package com.veda.assistant.provider
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
@@ -364,13 +365,20 @@ class AIProviderManager(context: Context) {
         if (active == null) {
             trySend("Error: No configured and enabled AI provider found. Please open Settings -> AI Providers and configure your API key.")
             close()
+            awaitClose {}
             return@callbackFlow
         }
 
-        if (active.providerPreset == "gemini") {
+        val eventSource: EventSource = if (active.providerPreset == "gemini") {
             streamGemini(active, systemPrompt, messages, this)
         } else {
             streamOpenAiCompatible(active, systemPrompt, messages, this)
+        }
+
+        awaitClose {
+            try {
+                eventSource.cancel()
+            } catch (e: Exception) {}
         }
     }
 
@@ -379,7 +387,7 @@ class AIProviderManager(context: Context) {
         systemPrompt: String,
         messages: List<Pair<String, String>>,
         flowScope: kotlinx.coroutines.channels.ProducerScope<String>
-    ) {
+    ): EventSource {
         val model = if (slot.model.isNotBlank()) slot.model else "gemini-2.0-flash"
         val url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":streamGenerateContent?alt=sse&key=" + slot.apiKey.trim()
 
@@ -402,7 +410,7 @@ class AIProviderManager(context: Context) {
         val reqBody = bodyJson.toString().toRequestBody("application/json".toMediaType())
         val req = Request.Builder().url(url).post(reqBody).build()
 
-        val eventSource = sseFactory.newEventSource(req, object : EventSourceListener() {
+        return sseFactory.newEventSource(req, object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 try {
                     val root = JSONObject(data)
@@ -430,8 +438,6 @@ class AIProviderManager(context: Context) {
                 flowScope.channel.close()
             }
         })
-
-        flowScope.invokeOnClose { eventSource.cancel() }
     }
 
     private fun streamOpenAiCompatible(
@@ -439,7 +445,7 @@ class AIProviderManager(context: Context) {
         systemPrompt: String,
         messages: List<Pair<String, String>>,
         flowScope: kotlinx.coroutines.channels.ProducerScope<String>
-    ) {
+    ): EventSource {
         val base = if (slot.baseUrl.isNotBlank()) slot.baseUrl.trimEnd('/') else "https://api.openai.com/v1"
         val url = "$base/chat/completions"
         val model = if (slot.model.isNotBlank()) slot.model else "gpt-4o"
@@ -462,7 +468,7 @@ class AIProviderManager(context: Context) {
             reqBuilder.addHeader("Authorization", "Bearer " + slot.apiKey.trim())
         }
 
-        val eventSource = sseFactory.newEventSource(reqBuilder.build(), object : EventSourceListener() {
+        return sseFactory.newEventSource(reqBuilder.build(), object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 if (data.trim() == "[DONE]") {
                     flowScope.channel.close()
@@ -490,7 +496,5 @@ class AIProviderManager(context: Context) {
                 flowScope.channel.close()
             }
         })
-
-        flowScope.invokeOnClose { eventSource.cancel() }
     }
 }

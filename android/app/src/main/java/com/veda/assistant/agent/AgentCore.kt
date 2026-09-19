@@ -6,7 +6,7 @@ import com.veda.assistant.tools.ToolRegistry
 import com.veda.assistant.tools.ToolResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.regex.Pattern
@@ -53,16 +53,15 @@ Never hallucinate or pretend an action succeeded without using the tool.
         userText: String,
         onToolActionStart: ((String) -> Unit)? = null,
         onToolActionComplete: ((String, ToolResult) -> Unit)? = null
-    ): Flow<String> = callbackFlow {
+    ): Flow<String> = flow {
         conversationHistory.add(Pair("user", userText))
 
         val active = providerManager.getActiveProvider()
         if (active == null) {
             val err = "V.E.D.A. requires an active AI provider. Please tap Settings ⚙ -> AI Providers to configure your API key."
-            trySend(err)
+            emit(err)
             conversationHistory.add(Pair("assistant", err))
-            close()
-            return@callbackFlow
+            return@flow
         }
 
         var accumulatedReply = ""
@@ -75,7 +74,7 @@ Never hallucinate or pretend an action succeeded without using the tool.
 
             stream.collect { chunk ->
                 accumulatedReply += chunk
-                trySend(chunk)
+                emit(chunk)
             }
 
             // Check if accumulated response contains a tool call
@@ -91,14 +90,14 @@ Never hallucinate or pretend an action succeeded without using the tool.
                     val tool = toolRegistry.getTool(toolName)
                     if (tool != null) {
                         onToolActionStart?.invoke(toolName)
-                        trySend("\n\n[⚡ Executing: ${tool.name}...]\n")
+                        emit("\n\n[⚡ Executing: ${tool.name}...]\n")
                         val result = withContext(Dispatchers.IO) {
                             tool.execute(args)
                         }
                         onToolActionComplete?.invoke(toolName, result)
 
                         val statusPrefix = if (result.success) "✓ " else "✕ "
-                        trySend("\n$statusPrefix${result.resultText}\n")
+                        emit("\n$statusPrefix${result.resultText}\n")
                         accumulatedReply += "\n$statusPrefix${result.resultText}"
                     }
                 } catch (e: Exception) {
@@ -107,10 +106,8 @@ Never hallucinate or pretend an action succeeded without using the tool.
             }
 
             conversationHistory.add(Pair("assistant", accumulatedReply))
-            close()
         } catch (e: Exception) {
-            trySend("\n[Agent Error: ${e.message}]")
-            close()
+            emit("\n[Agent Error: ${e.message}]")
         }
     }
 }
