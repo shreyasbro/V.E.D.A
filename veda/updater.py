@@ -114,6 +114,25 @@ class GitHubReleaseInfo:
         tag = self.tag_name or self.name or ""
         return tag.strip().lstrip("vV")
 
+    @property
+    def formatted_published_date(self) -> str:
+        if not self.published_at:
+            return "Unknown"
+        try:
+            # Format ISO date like 2026-09-19T12:00:00Z to 'September 19, 2026'
+            raw = self.published_at.rstrip("Z")
+            if "T" in raw:
+                date_part = raw.split("T")[0]
+                parts = [int(p) for p in date_part.split("-")]
+                if len(parts) == 3:
+                    import datetime
+                    d = datetime.date(parts[0], parts[1], parts[2])
+                    return d.strftime("%B %d, %Y")
+            return self.published_at
+        except Exception:
+            return self.published_at
+
+
     def find_windows_asset(self) -> Optional[GitHubReleaseAsset]:
         """
         Locates suitable Windows executable or zip archive:
@@ -433,18 +452,25 @@ class ProductionUpdater:
             return
 
         title = "V.E.D.A. Update Available"
-        msg = f"Version {release.clean_version} is available on GitHub."
+        msg = (
+            f"New version: v{release.clean_version}\n"
+            f"Current version: v{self.current_version}"
+        )
         if release.body:
             lines = [l.strip() for l in release.body.splitlines() if l.strip()]
             if lines:
-                msg += "\n" + "\n".join(lines[:3])
+                notes_preview = "\n".join(lines[:4])
+                msg += f"\n\nWhat's new:\n{notes_preview}"
 
         notification_manager.add_notification(
             category="UPDATE",
             title=title,
             message=msg,
             action_type="UPDATE_NOW",
-            action_data={"release_tag": release.tag_name, "html_url": release.html_url},
+            action_data={
+                "release_tag": release.tag_name,
+                "html_url": release.html_url or f"https://github.com/shreyasbro/V.E.D.A/releases/tag/{release.tag_name}"
+            },
             play_sound=settings.get("notification_sounds", False)
         )
 

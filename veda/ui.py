@@ -11,6 +11,7 @@ import pystray
 from dotenv import load_dotenv
 import customtkinter as ctk
 import tkinter as tk
+import webbrowser
 
 load_dotenv()
 
@@ -755,6 +756,25 @@ class VedaApp(ctk.CTk):
                         self._refresh_notification_badge()
                         self._open_notification_menu()
 
+                    def _view_release(act_d=n.action_data):
+                        url = (act_d.get("html_url") if isinstance(act_d, dict) else None) or "https://github.com/shreyasbro/V.E.D.A/releases/latest"
+                        try:
+                            webbrowser.open(url)
+                        except Exception:
+                            pass
+
+                    ctk.CTkButton(
+                        act_row,
+                        text="View Release",
+                        font=ctk.CTkFont(family="Consolas", size=9),
+                        fg_color="#1e293b",
+                        hover_color="#334155",
+                        text_color="#38bdf8",
+                        height=22,
+                        width=85,
+                        command=_view_release
+                    ).pack(side="left", padx=(0, 4))
+
                     ctk.CTkButton(
                         act_row,
                         text="Update Now",
@@ -764,18 +784,6 @@ class VedaApp(ctk.CTk):
                         height=22,
                         width=85,
                         command=_do_update
-                    ).pack(side="left", padx=(0, 4))
-
-                    ctk.CTkButton(
-                        act_row,
-                        text="View Details",
-                        font=ctk.CTkFont(family="Consolas", size=9),
-                        fg_color="#1e293b",
-                        hover_color="#334155",
-                        text_color="#38bdf8",
-                        height=22,
-                        width=85,
-                        command=lambda: (self._close_notification_menu(), self.open_settings_modal(initial_tab="About"))
                     ).pack(side="left", padx=(0, 4))
 
                     ctk.CTkButton(
@@ -2077,6 +2085,15 @@ class VedaApp(ctk.CTk):
             prompt_win.destroy()
             production_updater.apply_update_and_restart()
 
+        def _on_view_rel():
+            url = "https://github.com/shreyasbro/V.E.D.A/releases/latest"
+            if production_updater.latest_release:
+                url = production_updater.latest_release.html_url or f"https://github.com/shreyasbro/V.E.D.A/releases/tag/{production_updater.latest_release.tag_name}"
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+
         ctk.CTkButton(
             btn_row,
             text="Later",
@@ -2084,10 +2101,22 @@ class VedaApp(ctk.CTk):
             fg_color="#1e293b",
             hover_color="#334155",
             text_color="#94a3b8",
-            width=100,
+            width=80,
             height=32,
             command=_on_later
-        ).pack(side="left", padx=(0, 10))
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            btn_row,
+            text="View Release",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color="#1e293b",
+            hover_color="#334155",
+            text_color="#38bdf8",
+            width=115,
+            height=32,
+            command=_on_view_rel
+        ).pack(side="left", padx=(0, 8))
 
         ctk.CTkButton(
             btn_row,
@@ -2096,10 +2125,11 @@ class VedaApp(ctk.CTk):
             fg_color="#0284c7",
             hover_color="#0369a1",
             text_color="#ffffff",
-            width=160,
+            width=150,
             height=32,
             command=_on_restart
         ).pack(side="right")
+
 
     # ==========================================
     # SETTINGS MODAL (Start with Windows & Overlay)
@@ -2410,17 +2440,33 @@ class VedaApp(ctk.CTk):
         lbl_gh_details.pack(anchor="w", padx=12, pady=10)
 
         def _refresh_updates_tab_info():
-            st_text = production_updater.state.replace("_", " ")
-            last_chk = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(production_updater.last_check_time)) if production_updater.last_check_time else "Never"
-            rem_ver = production_updater.latest_release.clean_version if production_updater.latest_release else "--"
-            asset_info = production_updater.selected_asset.name if production_updater.selected_asset else "None"
+            rel = production_updater.latest_release
+            rem_ver = rel.clean_version if rel else "--"
+            pub_date = rel.formatted_published_date if rel else "--"
+            asset_info = production_updater.selected_asset.name if production_updater.selected_asset else "--"
+            
+            # Format status with bullet indicator
+            if production_updater.state == "UPDATE_AVAILABLE":
+                st_indicator = "● Update available"
+            elif production_updater.state in ["UP_TO_DATE"]:
+                st_indicator = "● Up to date"
+            elif production_updater.state in ["OFFLINE"]:
+                st_indicator = "● Offline"
+            elif production_updater.state in ["DOWNLOADING"]:
+                st_indicator = "● Downloading update..."
+            elif production_updater.state in ["VERIFYING"]:
+                st_indicator = "● Verifying checksum..."
+            elif production_updater.state in ["READY_TO_INSTALL"]:
+                st_indicator = "● Ready to install"
+            else:
+                st_indicator = f"● {production_updater.state.replace('_', ' ').capitalize()}"
+
             text = (
-                f"• Installed Version:   {VERSION} (Build {BUILD})\n"
-                f"• Latest Release:      {rem_ver}\n"
-                f"• Update Status:       {st_text}\n"
-                f"• GitHub Repository:   shreyasbro/V.E.D.A\n"
-                f"• Matched Asset:       {asset_info}\n"
-                f"• Last Checked:        {last_chk}"
+                f"• Current Version:        v{VERSION}\n"
+                f"• Latest GitHub Release:  v{rem_ver}\n"
+                f"• Status:                 {st_indicator}\n"
+                f"• Release Date:           {pub_date}\n"
+                f"• Release Package:        {asset_info}"
             )
             lbl_gh_details.configure(text=text)
 
@@ -2459,8 +2505,34 @@ class VedaApp(ctk.CTk):
         card_notes = ctk.CTkFrame(scroll_updates_tab, fg_color="#080c14", corner_radius=8, border_width=1, border_color="#1e293b")
         card_notes.pack(fill="x", pady=6)
 
-        ctk.CTkLabel(card_notes, text="📝 GitHub Release Notes", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"), text_color="#38bdf8").pack(anchor="w", padx=14, pady=(10, 4))
-        txt_notes = ctk.CTkTextbox(card_notes, fg_color="#05080e", font=ctk.CTkFont(family="Consolas", size=10), text_color="#e2e8f0", height=100)
+        notes_hdr_row = ctk.CTkFrame(card_notes, fg_color="transparent")
+        notes_hdr_row.pack(fill="x", padx=14, pady=(10, 4))
+
+        ctk.CTkLabel(notes_hdr_row, text="📝 GitHub Release Notes", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"), text_color="#38bdf8").pack(side="left")
+
+        def _on_open_release_notes_browser():
+            url = "https://github.com/shreyasbro/V.E.D.A/releases/latest"
+            if production_updater.latest_release:
+                url = production_updater.latest_release.html_url or f"https://github.com/shreyasbro/V.E.D.A/releases/tag/{production_updater.latest_release.tag_name}"
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+
+        btn_view_release_page = ctk.CTkButton(
+            notes_hdr_row,
+            text="🌐 View on GitHub",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            fg_color="#1e293b",
+            hover_color="#334155",
+            text_color="#38bdf8",
+            height=24,
+            width=130,
+            command=_on_open_release_notes_browser
+        )
+        btn_view_release_page.pack(side="right")
+
+        txt_notes = ctk.CTkTextbox(card_notes, fg_color="#05080e", font=ctk.CTkFont(family="Consolas", size=10), text_color="#e2e8f0", height=120)
         txt_notes.pack(fill="x", padx=14, pady=(0, 10))
         txt_notes.insert("end", "Check GitHub releases to view latest changelog.\n")
 
@@ -2482,10 +2554,16 @@ class VedaApp(ctk.CTk):
 
         def _update_notes_display():
             txt_notes.delete("1.0", "end")
-            if production_updater.latest_release and production_updater.latest_release.body:
-                txt_notes.insert("end", f"Release: {production_updater.latest_release.name or production_updater.latest_release.tag_name}\nPublished: {production_updater.latest_release.published_at}\n\n{production_updater.latest_release.body}")
+            rel = production_updater.latest_release
+            if rel and rel.body:
+                header_line = f"Title: {rel.name or rel.tag_name}\nPublished: {rel.formatted_published_date}\n\n"
+                txt_notes.insert("end", header_line + rel.body)
+            elif rel:
+                header_line = f"Title: {rel.name or rel.tag_name}\nPublished: {rel.formatted_published_date}\n\nNo release notes provided for this version.\n"
+                txt_notes.insert("end", header_line)
             else:
-                txt_notes.insert("end", "No release notes loaded.\n")
+                txt_notes.insert("end", "No release notes loaded. Click 'Check for Updates' to query GitHub.\n")
+
 
         # Action Buttons Row
         gh_act_row = ctk.CTkFrame(card_gh_ota, fg_color="transparent")
