@@ -254,9 +254,14 @@ class VedaApp(ctk.CTk):
         # Synchronize header badges with persisted provider settings
         self.after(50, lambda: (self._refresh_ai_provider_button(), self._refresh_status_pill(), self._refresh_notification_badge()))
 
-        # Asynchronously check for OTA updates on startup if enabled
+        # Connect ProductionUpdater hooks (busy check and prompt dialog)
+        production_updater.set_busy_hook(lambda: getattr(self, "_is_agent_busy", False) or getattr(self.automation_engine, "_is_running", False))
+        production_updater.set_prompt_restart_callback(lambda ver: self.after(0, lambda: self.prompt_restart_modal(ver)))
+
+        # Start 24-hour periodic update checker and initial check if enabled
         if VedaConfig.get_settings().get("update_auto_check", True):
-            self.after(2000, lambda: production_updater.check_for_updates_async())
+            production_updater.start_periodic_checker(24.0)
+            self.after(3000, lambda: production_updater.check_for_updates_async())
 
         # First-Run Permission Onboarding Check
         if VedaConfig.is_first_run():
@@ -2017,6 +2022,86 @@ class VedaApp(ctk.CTk):
         ).pack(side="right", padx=4, pady=8)
 
     # ==========================================
+    # UPDATE READY RESTART PROMPT MODAL
+    # ==========================================
+    def prompt_restart_modal(self, new_version: str):
+        """Displays modal asking user whether to Restart & Update or postpone (Later)."""
+        prompt_win = ctk.CTkToplevel(self)
+        prompt_win.title("V.E.D.A. — Update Ready")
+        prompt_win.geometry("440x250")
+        prompt_win.resizable(False, False)
+        prompt_win.configure(fg_color="#07090e")
+        prompt_win.attributes("-topmost", True)
+
+        try:
+            # Center modal relative to main app
+            self.update_idletasks()
+            x = self.winfo_x() + (self.winfo_width() // 2) - 220
+            y = self.winfo_y() + (self.winfo_height() // 2) - 125
+            prompt_win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+        box = ctk.CTkFrame(prompt_win, fg_color="#0b101b", corner_radius=10, border_width=1, border_color="#1e293b")
+        box.pack(fill="both", expand=True, padx=12, pady=12)
+
+        ctk.CTkLabel(
+            box,
+            text="🚀 V.E.D.A. Update Ready",
+            font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
+            text_color="#38bdf8"
+        ).pack(anchor="w", padx=16, pady=(14, 6))
+
+        msg = (
+            f"V.E.D.A. version {new_version} has been downloaded and verified.\n\n"
+            f"Would you like to restart V.E.D.A. now to apply the update?\n"
+            f"All your settings and data will remain intact."
+        )
+        ctk.CTkLabel(
+            box,
+            text=msg,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color="#cbd5e1",
+            justify="left",
+            wraplength=380
+        ).pack(anchor="w", padx=16, pady=(0, 14))
+
+        btn_row = ctk.CTkFrame(box, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(4, 12))
+
+        def _on_later():
+            production_updater.postpone_update(new_version)
+            prompt_win.destroy()
+
+        def _on_restart():
+            prompt_win.destroy()
+            production_updater.apply_update_and_restart()
+
+        ctk.CTkButton(
+            btn_row,
+            text="Later",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color="#1e293b",
+            hover_color="#334155",
+            text_color="#94a3b8",
+            width=100,
+            height=32,
+            command=_on_later
+        ).pack(side="left", padx=(0, 10))
+
+        ctk.CTkButton(
+            btn_row,
+            text="⚡ Restart & Update",
+            font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            text_color="#ffffff",
+            width=160,
+            height=32,
+            command=_on_restart
+        ).pack(side="right")
+
+    # ==========================================
     # SETTINGS MODAL (Start with Windows & Overlay)
     # ==========================================
     def open_settings_modal(self, icon=None, item=None, initial_tab=None):
@@ -2348,6 +2433,28 @@ class VedaApp(ctk.CTk):
         lbl_dl_telemetry = ctk.CTkLabel(prog_frame, text="", font=ctk.CTkFont(family="Consolas", size=10), text_color="#38bdf8", justify="left")
         lbl_dl_telemetry.pack(anchor="w", pady=(0, 2))
 
+        prog_bar = ctk.CTkProgressBar(prog_frame, height=8, corner_radius=4, fg_color="#1e293b", progress_color="#0284c7")
+        prog_bar.set(0.0)
+
+        def _on_cancel_download_click():
+            production_updater.cancel_download()
+            prog_bar.pack_forget()
+            btn_cancel_dl.pack_forget()
+            lbl_dl_telemetry.configure(text="Download cancelled.", text_color="#f59e0b")
+            btn_dl_update.configure(state="normal")
+            _refresh_updates_tab_info()
+
+        btn_cancel_dl = ctk.CTkButton(
+            prog_frame,
+            text="✕ Cancel Download",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            fg_color="#334155",
+            hover_color="#475569",
+            height=22,
+            width=120,
+            command=_on_cancel_download_click
+        )
+
         # Release Notes Preview Card
         card_notes = ctk.CTkFrame(scroll_updates_tab, fg_color="#080c14", corner_radius=8, border_width=1, border_color="#1e293b")
         card_notes.pack(fill="x", pady=6)
@@ -2413,19 +2520,28 @@ class VedaApp(ctk.CTk):
         def _on_download_github_update():
             lbl_gh_action_msg.configure(text="Starting background download...", text_color="#38bdf8")
             btn_dl_update.configure(state="disabled")
+            prog_bar.set(0.0)
+            prog_bar.pack(fill="x", pady=(4, 6))
+            btn_cancel_dl.pack(anchor="w", pady=(0, 4))
 
             def _prog(pct, done, total, speed, eta):
                 if settings_win.winfo_exists():
                     p_str = f"Downloading: {int(pct*100)}% ({done // (1024*1024)} MB / {total // (1024*1024)} MB) • {speed:.1f} MB/s"
                     if eta:
                         p_str += f" • ETA {eta}s"
-                    self.after(0, lambda: (lbl_dl_telemetry.configure(text=p_str), _refresh_updates_tab_info()))
+                    def _update_ui():
+                        lbl_dl_telemetry.configure(text=p_str)
+                        prog_bar.set(pct)
+                        _refresh_updates_tab_info()
+                    self.after(0, _update_ui)
 
             def _err(msg):
                 if settings_win.winfo_exists():
                     self.after(0, lambda: (
                         lbl_gh_action_msg.configure(text=f"✕ {msg}", text_color="#ef4444"),
                         btn_dl_update.configure(state="normal"),
+                        prog_bar.pack_forget(),
+                        btn_cancel_dl.pack_forget(),
                         _refresh_updates_tab_info()
                     ))
 
@@ -2434,6 +2550,8 @@ class VedaApp(ctk.CTk):
                     def _show_restart_prompt():
                         lbl_gh_action_msg.configure(text="✓ Verified! Ready to restart and install.", text_color="#10b981")
                         btn_dl_update.pack_forget()
+                        prog_bar.pack_forget()
+                        btn_cancel_dl.pack_forget()
                         btn_restart_install.pack(side="right", padx=(6, 0))
                     self.after(0, _show_restart_prompt)
 
@@ -2441,11 +2559,7 @@ class VedaApp(ctk.CTk):
 
         def _on_restart_and_install():
             lbl_gh_action_msg.configure(text="Launching external updater process...", text_color="#38bdf8")
-            # Trigger updater launch
-            target_pkg = os.path.join(tempfile.gettempdir(), "veda_update_packages", f"update_{production_updater.latest_release.clean_version}.exe")
-            if not os.path.exists(target_pkg):
-                target_pkg = os.path.join(tempfile.gettempdir(), "veda_update_packages", f"update_{production_updater.latest_release.clean_version}.zip")
-            production_updater._launch_external_updater(target_pkg)
+            production_updater.apply_update_and_restart()
 
         btn_chk_gh = ctk.CTkButton(
             gh_act_row,
@@ -2517,7 +2631,7 @@ class VedaApp(ctk.CTk):
 
         sw_auto_inst = ctk.CTkSwitch(
             card_upd_prefs,
-            text="Automatically install updates (Never restarts silently without prompt by default)",
+            text="Automatically install updates",
             font=ctk.CTkFont(family="Consolas", size=11),
             text_color="#f8fafc",
             command=lambda: VedaConfig.update_setting("update_auto_install", bool(sw_auto_inst.get()))
@@ -2526,7 +2640,20 @@ class VedaApp(ctk.CTk):
             sw_auto_inst.select()
         else:
             sw_auto_inst.deselect()
-        sw_auto_inst.pack(anchor="w", padx=16, pady=(6, 12))
+        sw_auto_inst.pack(anchor="w", padx=16, pady=6)
+
+        sw_ask_restart = ctk.CTkSwitch(
+            card_upd_prefs,
+            text="Ask before restarting V.E.D.A. (Recommended)",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color="#f8fafc",
+            command=lambda: VedaConfig.update_setting("update_ask_before_restart", bool(sw_ask_restart.get()))
+        )
+        if cur_settings.get("update_ask_before_restart", True):
+            sw_ask_restart.select()
+        else:
+            sw_ask_restart.deselect()
+        sw_ask_restart.pack(anchor="w", padx=16, pady=(6, 12))
 
         # ====================================================
         # TAB 3: IN-APP NOTIFICATIONS CENTER

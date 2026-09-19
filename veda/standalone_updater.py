@@ -3,6 +3,7 @@ V.E.D.A. Standalone Process Updater & Rollback Engine
 Launched as an isolated external process by V.E.D.A. when an update is applied.
 Waits for the main process to exit, creates a rollback backup, applies the update,
 and verifies launch before cleaning temporary update files.
+Preserves all user profile and settings data in ~/.veda.
 """
 
 import os
@@ -17,19 +18,30 @@ def log(msg: str):
     print(f"[VEDA-UPDATER] {msg}", flush=True)
 
 
-def wait_for_process_exit(pid: int, timeout_sec: int = 30) -> bool:
+def wait_for_process_exit(pid: int, timeout_sec: int = 45) -> bool:
     """Waits for the given process ID to terminate."""
     t0 = time.time()
     log(f"Waiting for main V.E.D.A. process (PID {pid}) to exit...")
     while time.time() - t0 < timeout_sec:
         try:
-            # Using Windows tasklist / ctypes or os.kill(pid, 0)
             os.kill(pid, 0)
         except (OSError, ProcessLookupError, PermissionError):
             log("Main process exited cleanly.")
             return True
         time.sleep(0.5)
     return False
+
+
+def copy_with_retry(src: str, dst: str, retries: int = 5, delay: float = 1.0):
+    """Copies a file with retries in case Windows briefly locks it."""
+    for attempt in range(retries):
+        try:
+            shutil.copy2(src, dst)
+            return
+        except Exception as e:
+            if attempt == retries - 1:
+                raise e
+            time.sleep(delay)
 
 
 def apply_update_and_verify(
@@ -47,11 +59,11 @@ def apply_update_and_verify(
     exe_path = os.path.join(install_dir, main_exe_name)
     backup_path = exe_path + ".bak"
 
-    # 2. Create Rollback Backup
+    # 2. Create Rollback Backup of executable
     if os.path.exists(exe_path):
         try:
             log(f"Creating rollback backup: {backup_path}")
-            shutil.copy2(exe_path, backup_path)
+            copy_with_retry(exe_path, backup_path)
         except Exception as e:
             log(f"Failed to create backup: {e}")
             return False
@@ -65,7 +77,7 @@ def apply_update_and_verify(
                 zip_ref.extractall(install_dir)
         else:
             log(f"Replacing executable: {exe_path}")
-            shutil.copy2(package_path, exe_path)
+            copy_with_retry(package_path, exe_path)
     except Exception as e:
         log(f"Failed to apply update files: {e}. Initiating rollback...")
         _rollback(exe_path, backup_path)
@@ -74,11 +86,17 @@ def apply_update_and_verify(
     # 4. Verify Launch
     log("Verifying updated version launch...")
     try:
-        verify_proc = subprocess.Popen([exe_path, "--verify-launch"])
-        time.sleep(2.0)
-        poll = verify_proc.poll()
-        if poll is not None and poll != 0:
-            log(f"Verification failed with exit code {poll}. Rolling back...")
+        # Run with --verify-launch flag
+        verify_proc = subprocess.Popen([exe_path, "--verify-launch"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            poll = verify_proc.wait(timeout=10.0)
+            if poll != 0:
+                log(f"Verification failed with exit code {poll}. Rolling back...")
+                _rollback(exe_path, backup_path)
+                return False
+        except subprocess.TimeoutExpired:
+            log("Verification timed out. Killing process and rolling back...")
+            verify_proc.kill()
             _rollback(exe_path, backup_path)
             return False
     except Exception as e:
@@ -89,11 +107,11 @@ def apply_update_and_verify(
     # 5. Relaunch V.E.D.A. normally
     log("Update verified! Relaunching V.E.D.A...")
     try:
-        subprocess.Popen([exe_path])
+        subprocess.Popen([exe_path], creationflags=getattr(subprocess, "DETACHED_PROCESS", 0x00000008))
     except Exception as e:
         log(f"Could not relaunch V.E.D.A.: {e}")
 
-    # 6. Cleanup temporary installer files
+    # 6. Cleanup temporary installer files and backup
     try:
         if os.path.exists(package_path):
             os.remove(package_path)
@@ -109,9 +127,9 @@ def _rollback(exe_path: str, backup_path: str):
     if os.path.exists(backup_path):
         try:
             log("Restoring previous executable from backup...")
-            shutil.copy2(backup_path, exe_path)
+            copy_with_retry(backup_path, exe_path)
             log("Restarting previous version...")
-            subprocess.Popen([exe_path])
+            subprocess.Popen([exe_path], creationflags=getattr(subprocess, "DETACHED_PROCESS", 0x00000008))
         except Exception as e:
             log(f"Rollback failed: {e}")
 

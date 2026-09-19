@@ -7,10 +7,15 @@ Features:
 - Release notes extraction and presentation.
 - Real background download with byte progress, percent, speed, and time remaining.
 - SHA-256 verification against asset digest / release sha256 checksums file.
+- Automatic download and automatic installation options with safe restart handling.
+- Prompt before restart when 'ask_before_restart' is enabled.
 - Separate updater process execution with automatic rollback if launch fails.
 - Preserves all persistent configuration and user credentials in ~/.veda.
 - Zero GitHub token embedded in application.
-- Bounded OTA diagnostics logger.
+- Periodic 24-hour update checking loop.
+- Full state machine: IDLE, CHECKING, UPDATE_AVAILABLE, DOWNLOADING, DOWNLOAD_CANCELLED,
+  VERIFYING, VERIFIED, READY_TO_INSTALL, WAITING_FOR_RESTART, INSTALLING, RESTARTING,
+  SUCCESS, FAILED, ROLLED_BACK, OFFLINE, NO_ASSET.
 """
 
 import os
@@ -19,7 +24,6 @@ import sys
 import json
 import time
 import hashlib
-import tempfile
 import threading
 import urllib.request
 import urllib.error
@@ -28,7 +32,7 @@ from typing import Dict, Any, Optional, Callable, List, Tuple
 
 from veda.version import VERSION, BUILD, is_newer_version, parse_semver
 from veda.notifications import notification_manager
-from veda.config import VedaConfig
+from veda.config import VedaConfig, UPDATE_CACHE_DIR
 
 # Centralized GitHub OTA Configuration
 GITHUB_OWNER = "shreyasbro"
@@ -41,8 +45,16 @@ STATE_CHECKING = "CHECKING"
 STATE_UP_TO_DATE = "UP_TO_DATE"
 STATE_UPDATE_AVAILABLE = "UPDATE_AVAILABLE"
 STATE_DOWNLOADING = "DOWNLOADING"
+STATE_DOWNLOAD_CANCELLED = "DOWNLOAD_CANCELLED"
 STATE_VERIFYING = "VERIFYING"
+STATE_VERIFIED = "VERIFIED"
+STATE_READY_TO_INSTALL = "READY_TO_INSTALL"
+STATE_WAITING_FOR_RESTART = "WAITING_FOR_RESTART"
 STATE_INSTALLING = "INSTALLING"
+STATE_RESTARTING = "RESTARTING"
+STATE_SUCCESS = "SUCCESS"
+STATE_FAILED = "FAILED"
+STATE_ROLLED_BACK = "ROLLED_BACK"
 STATE_UPDATE_FAILED = "UPDATE_FAILED"
 STATE_OFFLINE = "OFFLINE"
 STATE_NO_ASSET = "NO_ASSET"
@@ -115,7 +127,6 @@ class GitHubReleaseInfo:
         for asset in self.assets:
             n_lower = asset.name.lower()
             if n_lower.endswith(".exe") or n_lower.endswith(".zip"):
-                # Prioritize Windows specific binaries
                 score = 0
                 if "veda" in n_lower or "v.e.d.a" in n_lower:
                     score += 10
@@ -163,6 +174,8 @@ class ProductionUpdater:
         self.selected_asset: Optional[GitHubReleaseAsset] = None
         self.last_check_time: Optional[float] = None
         self.last_error: Optional[str] = None
+        self.downloaded_package_path: Optional[str] = None
+        self.postponed_version: Optional[str] = None
 
         # Download telemetry
         self.download_progress: float = 0.0
@@ -171,10 +184,33 @@ class ProductionUpdater:
         self.total_bytes: int = 0
         self.eta_seconds: Optional[int] = None
         self._cancel_download_event = threading.Event()
+        self._is_downloading = False
+
+        # Periodic checker thread & busy hook
+        self._periodic_thread: Optional[threading.Thread] = None
+        self._stop_periodic_event = threading.Event()
+        self._is_busy_hook: Optional[Callable[[], bool]] = None
+        self._prompt_restart_callback: Optional[Callable[[str], None]] = None
 
         self._listeners: list = []
         self._lock = threading.Lock()
         self._initialized = True
+
+    def set_busy_hook(self, hook: Callable[[], bool]):
+        """Sets a callback to test if V.E.D.A. is currently executing a task."""
+        self._is_busy_hook = hook
+
+    def set_prompt_restart_callback(self, cb: Callable[[str], None]):
+        """Sets UI prompt callback when an update is ready to restart."""
+        self._prompt_restart_callback = cb
+
+    def is_busy(self) -> bool:
+        if self._is_busy_hook:
+            try:
+                return bool(self._is_busy_hook())
+            except Exception:
+                return False
+        return False
 
     def subscribe(self, callback: Callable[[str, Dict[str, Any]], None]):
         with self._lock:
@@ -199,8 +235,35 @@ class ProductionUpdater:
             except Exception:
                 pass
 
+    def start_periodic_checker(self, interval_hours: float = 24.0):
+        """Starts background thread to check updates periodically (e.g. every 24 hours)."""
+        if self._periodic_thread and self._periodic_thread.is_alive():
+            return
+
+        def _loop():
+            # Wait initial 5 seconds before first background check
+            time.sleep(5.0)
+            while not self._stop_periodic_event.is_set():
+                settings = VedaConfig.get_settings()
+                if settings.get("update_auto_check", True):
+                    ota_logger.log("PERIODIC_CHECK", "Running periodic update check...")
+                    self.check_for_updates()
+
+                # Sleep interval (default 24h) checking stop event every 30 seconds
+                total_sleep = int(interval_hours * 3600)
+                slept = 0
+                while slept < total_sleep and not self._stop_periodic_event.is_set():
+                    time.sleep(30)
+                    slept += 30
+
+        self._periodic_thread = threading.Thread(target=_loop, daemon=True, name="VEDA-PeriodicUpdateChecker")
+        self._periodic_thread.start()
+
+    def stop_periodic_checker(self):
+        self._stop_periodic_event.set()
+
     def check_for_updates_async(self, on_complete: Optional[Callable[[Dict[str, Any]], None]] = None):
-        """Asynchronously checks GitHub releases without blocking the UI thread."""
+        """Asynchronously checks GitHub releases without blocking caller."""
         def _worker():
             res = self.check_for_updates()
             if on_complete:
@@ -212,6 +275,14 @@ class ProductionUpdater:
 
     def check_for_updates(self) -> Dict[str, Any]:
         """Checks the real GitHub release API against current installed version."""
+        if self.state in [STATE_DOWNLOADING, STATE_INSTALLING]:
+            return {
+                "success": False,
+                "update_available": False,
+                "current_version": self.current_version,
+                "message": f"Update already in progress ({self.state})"
+            }
+
         self._set_state(STATE_CHECKING)
         ota_logger.log("CHECK_START", f"Checking GitHub release at {GITHUB_LATEST_RELEASE_URL}")
 
@@ -223,7 +294,7 @@ class ProductionUpdater:
                     "Accept": "application/vnd.github.v3+json"
                 }
             )
-            with urllib.request.urlopen(req, timeout=8.0) as resp:
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
                 status_code = resp.status
                 ota_logger.log("HTTP_RESPONSE", f"GitHub responded with HTTP {status_code}")
 
@@ -265,7 +336,16 @@ class ProductionUpdater:
                             "asset_size": win_asset.size_bytes
                         })
                         ota_logger.log("UPDATE_AVAILABLE", f"Newer version detected: v{remote_ver} (Asset: {win_asset.name})")
-                        self._post_update_notification(release, win_asset)
+
+                        # Only notify if this version hasn't been postponed by user
+                        if self.postponed_version != remote_ver:
+                            self._post_update_notification(release, win_asset)
+
+                        # Check if auto-download is configured
+                        settings = VedaConfig.get_settings()
+                        if settings.get("update_auto_download", False):
+                            ota_logger.log("AUTO_DOWNLOAD", f"Automatically downloading v{remote_ver}...")
+                            self.download_and_install_async()
 
                         return {
                             "success": True,
@@ -289,7 +369,6 @@ class ProductionUpdater:
 
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                # No release published yet
                 self.last_error = "No releases found on GitHub repository."
                 self._set_state(STATE_UP_TO_DATE, {"error": self.last_error})
                 ota_logger.log("HTTP_404", "No releases published yet on GitHub", level="INFO")
@@ -302,11 +381,11 @@ class ProductionUpdater:
                 }
             elif e.code in [403, 429]:
                 self.last_error = "GitHub API rate limit reached. Please try again later."
-                self._set_state(STATE_UPDATE_FAILED, {"error": self.last_error})
+                self._set_state(STATE_FAILED, {"error": self.last_error})
                 ota_logger.log("HTTP_RATELIMIT", f"GitHub API returned {e.code}", level="WARN")
             else:
                 self.last_error = f"GitHub API error (HTTP {e.code})"
-                self._set_state(STATE_UPDATE_FAILED, {"error": self.last_error})
+                self._set_state(STATE_FAILED, {"error": self.last_error})
                 ota_logger.log("HTTP_ERROR", f"HTTP {e.code}: {e.reason}", level="ERROR")
 
         except urllib.error.URLError as e:
@@ -316,7 +395,7 @@ class ProductionUpdater:
 
         except Exception as e:
             self.last_error = f"Unable to check for updates: {e}"
-            self._set_state(STATE_UPDATE_FAILED, {"error": self.last_error})
+            self._set_state(STATE_FAILED, {"error": self.last_error})
             ota_logger.log("CHECK_ERROR", f"Exception during check: {e}", level="ERROR")
 
         return {
@@ -332,10 +411,9 @@ class ProductionUpdater:
         if not settings.get("update_notifications", True):
             return
 
-        title = f"V.E.D.A. Update Available"
+        title = "V.E.D.A. Update Available"
         msg = f"Version {release.clean_version} is available on GitHub."
         if release.body:
-            # Take first 3 lines of release body
             lines = [l.strip() for l in release.body.splitlines() if l.strip()]
             if lines:
                 msg += "\n" + "\n".join(lines[:3])
@@ -352,6 +430,15 @@ class ProductionUpdater:
     def cancel_download(self):
         """Cancels an in-flight download."""
         self._cancel_download_event.set()
+        self._set_state(STATE_DOWNLOAD_CANCELLED)
+        ota_logger.log("DOWNLOAD_CANCEL", "Update download canceled by user")
+
+    def postpone_update(self, version: Optional[str] = None):
+        """User chose 'Later'. Postpone notifications for this version."""
+        ver = version or (self.latest_release.clean_version if self.latest_release else None)
+        self.postponed_version = ver
+        self._set_state(STATE_WAITING_FOR_RESTART, {"postponed": True, "version": ver})
+        ota_logger.log("UPDATE_POSTPONED", f"User chose to postpone update for version {ver}")
 
     def download_and_install_async(
         self,
@@ -360,16 +447,24 @@ class ProductionUpdater:
         on_ready_to_restart: Optional[Callable[[], None]] = None
     ):
         """Downloads the real GitHub release asset in the background."""
+        if self._is_downloading:
+            return
+
         def _worker():
-            success, err = self._download_and_install_impl(progress_callback, on_ready_to_restart)
-            if not success:
-                self._set_state(STATE_UPDATE_FAILED, {"error": err})
-                ota_logger.log("DOWNLOAD_FAIL", f"Download/install failed: {err}", level="ERROR")
-                if on_error:
-                    try:
-                        on_error(err)
-                    except Exception:
-                        pass
+            self._is_downloading = True
+            try:
+                success, err = self._download_and_install_impl(progress_callback, on_ready_to_restart)
+                if not success:
+                    self._set_state(STATE_FAILED, {"error": err})
+                    ota_logger.log("DOWNLOAD_FAIL", f"Download/install failed: {err}", level="ERROR")
+                    if on_error:
+                        try:
+                            on_error(err)
+                        except Exception:
+                            pass
+            finally:
+                self._is_downloading = False
+
         threading.Thread(target=_worker, daemon=True).start()
 
     def _download_and_install_impl(
@@ -389,11 +484,12 @@ class ProductionUpdater:
         self._cancel_download_event.clear()
         ota_logger.log("DOWNLOAD_START", f"Starting download: {asset.name} ({asset.size_bytes} bytes)")
 
-        # Dynamic temporary download directory
-        temp_dir = os.path.join(tempfile.gettempdir(), "veda_update_packages")
-        os.makedirs(temp_dir, exist_ok=True)
+        # Directory: %LOCALAPPDATA%\V.E.D.A\updates
+        update_dir = UPDATE_CACHE_DIR
+        os.makedirs(update_dir, exist_ok=True)
         ext = ".zip" if asset.name.lower().endswith(".zip") else ".exe"
-        target_pkg = os.path.join(temp_dir, f"update_{self.latest_release.clean_version}{ext}")
+        target_pkg = os.path.join(update_dir, f"update_{self.latest_release.clean_version}{ext}")
+        self.downloaded_package_path = target_pkg
 
         try:
             req = urllib.request.Request(
@@ -415,7 +511,11 @@ class ProductionUpdater:
                         if self._cancel_download_event.is_set():
                             f.close()
                             if os.path.exists(target_pkg):
-                                os.remove(target_pkg)
+                                try:
+                                    os.remove(target_pkg)
+                                except Exception:
+                                    pass
+                            self._set_state(STATE_DOWNLOAD_CANCELLED)
                             ota_logger.log("DOWNLOAD_CANCEL", "Download canceled by user")
                             return False, "Download canceled by user"
 
@@ -428,8 +528,8 @@ class ProductionUpdater:
 
                         now = time.time()
                         dt = now - last_time
-                        if dt >= 0.5:
-                            speed = ((downloaded - last_downloaded) / dt) / (1024 * 1024)  # MB/s
+                        if dt >= 0.3 or downloaded == total_size:
+                            speed = ((downloaded - last_downloaded) / dt) / (1024 * 1024) if dt > 0 else 0.0
                             self.download_speed_mbps = speed
                             self.downloaded_bytes = downloaded
                             self.total_bytes = total_size
@@ -437,7 +537,7 @@ class ProductionUpdater:
                             self.download_progress = pct
 
                             rem_bytes = total_size - downloaded
-                            speed_bytes = (downloaded - last_downloaded) / dt
+                            speed_bytes = ((downloaded - last_downloaded) / dt) if dt > 0 else 0
                             eta = int(rem_bytes / speed_bytes) if speed_bytes > 0 else None
                             self.eta_seconds = eta
 
@@ -460,23 +560,48 @@ class ProductionUpdater:
             if expected_sha:
                 if calc_sha != expected_sha.lower():
                     if os.path.exists(target_pkg):
-                        os.remove(target_pkg)
+                        try:
+                            os.remove(target_pkg)
+                        except Exception:
+                            pass
+                    self._set_state(STATE_FAILED, {"error": "Update verification failed. SHA-256 checksum mismatch."})
                     ota_logger.log("SHA_MISMATCH", f"Expected: {expected_sha}, Got: {calc_sha}", level="ERROR")
-                    return False, f"Update verification failed. Checksum mismatch."
+                    notification_manager.add_notification(
+                        category="UPDATE",
+                        title="Update Verification Failed",
+                        message="The downloaded update package failed SHA-256 integrity verification. The corrupted file has been removed."
+                    )
+                    return False, "Update verification failed. Checksum mismatch."
                 ota_logger.log("SHA_MATCH", "SHA256 verified successfully against release manifest")
+
+            self._set_state(STATE_VERIFIED)
 
             # 3. Ready to install
             settings = VedaConfig.get_settings()
             auto_install = settings.get("update_auto_install", False)
+            ask_restart = settings.get("update_ask_before_restart", True)
 
-            if not auto_install and on_ready_to_restart:
-                ota_logger.log("WAIT_CONFIRM", "Update downloaded and verified. Prompting user to install.")
-                on_ready_to_restart()
+            self._set_state(STATE_READY_TO_INSTALL)
+
+            # Check if user needs to be prompted before restart
+            if ask_restart or not auto_install:
+                self._set_state(STATE_WAITING_FOR_RESTART)
+                ota_logger.log("WAIT_CONFIRM", "Update downloaded and verified. Prompting user to restart.")
+                if on_ready_to_restart:
+                    try:
+                        on_ready_to_restart()
+                    except Exception:
+                        pass
+                if self._prompt_restart_callback:
+                    try:
+                        self._prompt_restart_callback(self.latest_release.clean_version)
+                    except Exception:
+                        pass
                 return True, ""
 
-            # Automatic or confirmed installation
-            self._set_state(STATE_INSTALLING)
-            self._launch_external_updater(target_pkg)
+            # If auto_install is True and ask_before_restart is False:
+            # Check if V.E.D.A is busy before restarting
+            self._safe_auto_restart(target_pkg)
             return True, ""
 
         except Exception as e:
@@ -485,21 +610,52 @@ class ProductionUpdater:
                     os.remove(target_pkg)
                 except Exception:
                     pass
+            self._set_state(STATE_FAILED, {"error": str(e)})
             return False, str(e)
+
+    def _safe_auto_restart(self, package_path: str):
+        """Waits until V.E.D.A. is not busy before launching standalone updater."""
+        def _wait_and_restart():
+            ota_logger.log("AUTO_RESTART_WAIT", "Checking if V.E.D.A. is busy before auto-restart...")
+            # Wait up to 60 seconds if busy
+            for _ in range(30):
+                if not self.is_busy():
+                    break
+                time.sleep(2.0)
+
+            self.apply_update_and_restart(package_path)
+
+        threading.Thread(target=_wait_and_restart, daemon=True).start()
+
+    def apply_update_and_restart(self, package_path: Optional[str] = None):
+        """Triggers the external standalone updater and exits V.E.D.A."""
+        pkg = package_path or self.downloaded_package_path
+        if not pkg or not os.path.exists(pkg):
+            # Try to resolve in cache directory
+            if self.latest_release:
+                for ext in [".exe", ".zip"]:
+                    cand = os.path.join(UPDATE_CACHE_DIR, f"update_{self.latest_release.clean_version}{ext}")
+                    if os.path.exists(cand):
+                        pkg = cand
+                        break
+        if not pkg or not os.path.exists(pkg):
+            self._set_state(STATE_FAILED, {"error": "Update package file not found."})
+            return
+
+        self._set_state(STATE_INSTALLING)
+        self._launch_external_updater(pkg)
 
     def _extract_expected_checksum(self, asset_name: str) -> Optional[str]:
         """Attempts to find SHA256 checksum in release assets or release notes body."""
         if not self.latest_release:
             return None
 
-        # Look in release notes text
         body = self.latest_release.body or ""
         sha_pattern = r"\b([a-fA-F0-9]{64})\b"
         matches = re.findall(sha_pattern, body)
         if matches:
             return matches[0]
 
-        # Look for checksum file asset
         chk_asset = self.latest_release.find_checksum_asset()
         if chk_asset and chk_asset.download_url:
             try:
@@ -519,6 +675,7 @@ class ProductionUpdater:
     def _launch_external_updater(self, package_path: str):
         """Spawns standalone updater process and cleanly shuts down current V.E.D.A. instance."""
         pid = os.getpid()
+        self._set_state(STATE_RESTARTING)
         if getattr(sys, "frozen", False):
             install_dir = os.path.dirname(sys.executable)
             main_exe = os.path.basename(sys.executable)

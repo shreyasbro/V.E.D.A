@@ -11,6 +11,7 @@ HISTORY_PATH = os.path.join(CONFIG_DIR, "chat_history.json")
 CACHE_DIR = os.path.join(CONFIG_DIR, "cache")
 SCREENSHOT_FILE = os.path.join(CACHE_DIR, "veda_current_screen.png")
 KOKORO_MODELS_DIR = os.path.join(CONFIG_DIR, "models", "kokoro")
+UPDATE_CACHE_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "V.E.D.A", "updates")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "identity": {
@@ -47,6 +48,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "update_auto_check": True,
         "update_auto_download": False,
         "update_auto_install": False,
+        "update_ask_before_restart": True,
         "update_notifications": True,
         "notification_sounds": False,
         "github_owner": "shreyasbro",
