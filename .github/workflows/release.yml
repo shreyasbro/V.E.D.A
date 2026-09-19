@@ -1,0 +1,84 @@
+name: Release V.E.D.A.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Extract Tag Name
+        id: get_version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $clean = $tag.TrimStart("vV")
+          Write-Output "VERSION=$clean" >> $env:GITHUB_OUTPUT
+          Write-Output "TAG_NAME=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Build V.E.D.A. Executable
+        run: |
+          python build.py
+
+      - name: Package Release Assets & Generate SHA-256
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.get_version.outputs.VERSION }}"
+          $setupName = "VEDA-Setup-v${ver}.exe"
+          $shaName = "${setupName}.sha256"
+
+          if (Test-Path "dist\VEDA\VEDA.exe") {
+              Compress-Archive -Path "dist\VEDA\*" -DestinationPath "dist\VEDA-v${ver}.zip" -Force
+              Copy-Item "dist\VEDA\VEDA.exe" "dist\$setupName"
+          } else {
+              throw "Build output not found at dist\VEDA\VEDA.exe"
+          }
+
+          $hash = (Get-FileHash -Path "dist\$setupName" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $setupName" | Out-File -FilePath "dist\$shaName" -Encoding ascii
+
+          Write-Host "Generated $setupName (SHA256: $hash)"
+          Write-Host "Generated $shaName"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "V.E.D.A. Release ${{ steps.get_version.outputs.TAG_NAME }}"
+          body: |
+            ## V.E.D.A. ${{ steps.get_version.outputs.TAG_NAME }}
+            
+            ### Automated Release Build
+            - Windows Standalone Executable & Package
+            - Built with Python 3.11 & PyInstaller
+            
+            ### Integrity Verification (SHA-256)
+            Please verify your download against the attached `.sha256` asset file.
+          files: |
+            dist/VEDA-Setup-v${{ steps.get_version.outputs.VERSION }}.exe
+            dist/VEDA-Setup-v${{ steps.get_version.outputs.VERSION }}.exe.sha256
+            dist/VEDA-v${{ steps.get_version.outputs.VERSION }}.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

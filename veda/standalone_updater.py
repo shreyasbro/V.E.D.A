@@ -68,13 +68,23 @@ def apply_update_and_verify(
             log(f"Failed to create backup: {e}")
             return False
 
-    # 3. Apply New Binary or Directory Update
+    # 3. Apply New Binary or Directory / Installer Update
     try:
-        if package_path.endswith(".zip"):
+        pkg_lower = package_path.lower()
+        if pkg_lower.endswith(".zip"):
             import zipfile
             log(f"Extracting update archive: {package_path} -> {install_dir}")
             with zipfile.ZipFile(package_path, 'r') as zip_ref:
                 zip_ref.extractall(install_dir)
+        elif "setup" in pkg_lower or "installer" in pkg_lower:
+            log(f"Executing Windows installer package: {package_path}")
+            # Try running installer silently or waiting for its completion
+            inst_proc = subprocess.run([package_path, "/S", f"/D={install_dir}"], capture_output=True, timeout=120)
+            if inst_proc.returncode != 0:
+                # If silent flag not recognized, try standard execution
+                inst_proc2 = subprocess.run([package_path], timeout=180)
+                if inst_proc2.returncode != 0:
+                    raise RuntimeError(f"Installer exited with code {inst_proc2.returncode}")
         else:
             log(f"Replacing executable: {exe_path}")
             copy_with_retry(package_path, exe_path)

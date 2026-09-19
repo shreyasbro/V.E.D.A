@@ -118,24 +118,25 @@ class GitHubReleaseInfo:
         """
         Locates suitable Windows executable or zip archive:
         Matches patterns like:
-        - V.E.D.A*.exe
-        - VEDA*.exe
-        - V.E.D.A*.zip
-        - VEDA*.zip
+        - VEDA-Setup*.exe
+        - V.E.D.A*.exe / VEDA*.exe
+        - VEDA*.zip / V.E.D.A*.zip
         """
         candidates = []
         for asset in self.assets:
             n_lower = asset.name.lower()
+            if n_lower.endswith(".sha256") or n_lower.endswith(".md5") or n_lower.endswith(".txt"):
+                continue
             if n_lower.endswith(".exe") or n_lower.endswith(".zip"):
                 score = 0
+                if "setup" in n_lower or "installer" in n_lower:
+                    score += 20
                 if "veda" in n_lower or "v.e.d.a" in n_lower:
                     score += 10
-                if "setup" in n_lower or "installer" in n_lower:
-                    score += 5
                 if "win" in n_lower or "x64" in n_lower or "windows" in n_lower:
                     score += 5
                 if n_lower.endswith(".exe"):
-                    score += 3
+                    score += 5
                 candidates.append((score, asset))
 
         if candidates:
@@ -144,12 +145,32 @@ class GitHubReleaseInfo:
 
         return None
 
-    def find_checksum_asset(self) -> Optional[GitHubReleaseAsset]:
-        """Finds any checksum file in release assets (e.g. SHA256SUMS.txt, checksums.txt)."""
+    def find_checksum_asset(self, target_asset_name: Optional[str] = None) -> Optional[GitHubReleaseAsset]:
+        """
+        Finds the matching checksum file in release assets.
+        Prioritizes:
+        1. <target_asset_name>.sha256 (e.g. VEDA-Setup-v1.0.1.exe.sha256)
+        2. Exact filename match with .sha256
+        3. Generic sha256 checksums file (e.g. SHA256SUMS.txt, checksums.txt)
+        """
+        if target_asset_name:
+            target_lower = target_asset_name.lower()
+            expected_exact = f"{target_lower}.sha256"
+            for asset in self.assets:
+                if asset.name.lower() == expected_exact:
+                    return asset
+
+        # Fallback to any matching checksum asset
+        for asset in self.assets:
+            n_lower = asset.name.lower()
+            if target_asset_name and target_asset_name.lower() in n_lower and "sha256" in n_lower:
+                return asset
+
         for asset in self.assets:
             n_lower = asset.name.lower()
             if "sha256" in n_lower or "checksum" in n_lower or n_lower.endswith(".sha256"):
                 return asset
+
         return None
 
 
@@ -650,25 +671,34 @@ class ProductionUpdater:
         if not self.latest_release:
             return None
 
-        body = self.latest_release.body or ""
         sha_pattern = r"\b([a-fA-F0-9]{64})\b"
-        matches = re.findall(sha_pattern, body)
-        if matches:
-            return matches[0]
 
-        chk_asset = self.latest_release.find_checksum_asset()
+        # 1. Look for asset-specific checksum file (e.g. VEDA-Setup-v1.0.1.exe.sha256)
+        chk_asset = self.latest_release.find_checksum_asset(asset_name)
         if chk_asset and chk_asset.download_url:
             try:
+                ota_logger.log("FETCH_CHECKSUM", f"Downloading checksum asset: {chk_asset.name}")
                 req = urllib.request.Request(chk_asset.download_url, headers={"User-Agent": f"VEDA-Updater/{self.current_version}"})
                 with urllib.request.urlopen(req, timeout=10.0) as resp:
-                    text = resp.read().decode("utf-8", errors="ignore")
+                    text = resp.read().decode("utf-8", errors="ignore").strip()
+                    # First check if the file contains the target asset name
                     for line in text.splitlines():
                         if asset_name.lower() in line.lower():
                             line_matches = re.findall(sha_pattern, line)
                             if line_matches:
                                 return line_matches[0]
-            except Exception:
-                pass
+                    # If single line or raw hash in dedicated .sha256 file
+                    all_matches = re.findall(sha_pattern, text)
+                    if all_matches:
+                        return all_matches[0]
+            except Exception as e:
+                ota_logger.log("CHECKSUM_FETCH_ERR", f"Failed to fetch checksum asset: {e}", level="WARN")
+
+        # 2. Look in release notes text
+        body = self.latest_release.body or ""
+        matches = re.findall(sha_pattern, body)
+        if matches:
+            return matches[0]
 
         return None
 
