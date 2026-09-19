@@ -14,6 +14,9 @@ import okhttp3.sse.EventSources
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class AIProviderManager(context: Context) {
@@ -47,10 +50,137 @@ class AIProviderManager(context: Context) {
         keyStore.saveProviders(providerSlots)
     }
 
+    fun removeProvider(slotId: Int) {
+        val index = providerSlots.indexOfFirst { it.id == slotId }
+        if (index != -1) {
+            val s = providerSlots[index]
+            providerSlots[index] = s.copy(
+                apiKey = "",
+                baseUrl = "",
+                enabled = false,
+                status = "Not Tested",
+                lastLatencyMs = null,
+                lastTested = null,
+                availableModels = emptyList()
+            )
+            keyStore.saveProviders(providerSlots)
+        }
+    }
+
     fun getActiveProvider(): ProviderSlot? {
         val primary = providerSlots.firstOrNull { it.enabled && it.isPrimary && it.apiKey.isNotBlank() }
         if (primary != null) return primary
         return providerSlots.firstOrNull { it.enabled && it.apiKey.isNotBlank() }
+    }
+
+    suspend fun fetchModels(slotId: Int): Result<List<String>> = withContext(Dispatchers.IO) {
+        val slot = providerSlots.firstOrNull { it.id == slotId }
+            ?: return@withContext Result.failure(Exception("Provider slot not found"))
+
+        if (slot.apiKey.isBlank() && slot.providerPreset != "ollama") {
+            return@withContext Result.failure(Exception("API key is required to fetch models"))
+        }
+
+        try {
+            val models = when (slot.providerPreset) {
+                "gemini" -> fetchGeminiModels(slot)
+                "anthropic" -> fetchAnthropicModels(slot)
+                else -> fetchOpenAiCompatibleModels(slot)
+            }
+
+            if (models.isEmpty()) {
+                Result.failure(Exception("No models returned by provider"))
+            } else {
+                val updated = slot.copy(availableModels = models)
+                updateSlotInMemory(updated)
+                keyStore.saveProviders(providerSlots)
+                Result.success(models)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun fetchGeminiModels(slot: ProviderSlot): List<String> {
+        val url = "https://generativelanguage.googleapis.com/v1beta/models?key=" + slot.apiKey.trim()
+        val req = Request.Builder().url(url).get().build()
+        httpClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val errBody = resp.body?.string() ?: ""
+                throw IOException("Gemini API error (HTTP ${resp.code}): $errBody")
+            }
+            val json = JSONObject(resp.body?.string() ?: "{}")
+            val modelsArray = json.optJSONArray("models") ?: JSONArray()
+            val list = mutableListOf<String>()
+            for (i in 0 until modelsArray.length()) {
+                val m = modelsArray.getJSONObject(i)
+                val name = m.getString("name").removePrefix("models/")
+                val supportedMethods = m.optJSONArray("supportedGenerationMethods")
+                var canGenerate = false
+                if (supportedMethods != null) {
+                    for (j in 0 until supportedMethods.length()) {
+                        if (supportedMethods.getString(j) == "generateContent") canGenerate = true
+                    }
+                }
+                if (canGenerate && !name.contains("embedding", ignoreCase = true)) {
+                    list.add(name)
+                }
+            }
+            return list.ifEmpty { listOf("gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro") }
+        }
+    }
+
+    private fun fetchAnthropicModels(slot: ProviderSlot): List<String> {
+        val base = if (slot.baseUrl.isNotBlank()) slot.baseUrl.trimEnd('/') else "https://api.anthropic.com/v1"
+        val url = "$base/models"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("x-api-key", slot.apiKey.trim())
+            .addHeader("anthropic-version", "2023-06-01")
+            .get()
+            .build()
+        return try {
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val json = JSONObject(resp.body?.string() ?: "{}")
+                    val data = json.optJSONArray("data") ?: JSONArray()
+                    val list = mutableListOf<String>()
+                    for (i in 0 until data.length()) {
+                        list.add(data.getJSONObject(i).getString("id"))
+                    }
+                    list.ifEmpty { listOf("claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022") }
+                } else {
+                    listOf("claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229")
+                }
+            }
+        } catch (e: Exception) {
+            listOf("claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022")
+        }
+    }
+
+    private fun fetchOpenAiCompatibleModels(slot: ProviderSlot): List<String> {
+        val base = if (slot.baseUrl.isNotBlank()) slot.baseUrl.trimEnd('/') else "https://api.openai.com/v1"
+        val url = "$base/models"
+        val reqBuilder = Request.Builder().url(url).get()
+        if (slot.apiKey.isNotBlank() && slot.providerPreset != "ollama") {
+            reqBuilder.addHeader("Authorization", "Bearer " + slot.apiKey.trim())
+        }
+        httpClient.newCall(reqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val err = resp.body?.string() ?: ""
+                throw IOException("Provider HTTP ${resp.code}: $err")
+            }
+            val json = JSONObject(resp.body?.string() ?: "{}")
+            val data = json.optJSONArray("data") ?: JSONArray()
+            val list = mutableListOf<String>()
+            for (i in 0 until data.length()) {
+                val id = data.getJSONObject(i).getString("id")
+                if (!id.contains("embedding", ignoreCase = true) && !id.contains("whisper", ignoreCase = true) && !id.contains("tts", ignoreCase = true)) {
+                    list.add(id)
+                }
+            }
+            return list
+        }
     }
 
     suspend fun testConnection(slotId: Int): Triple<String, Int?, String?> = withContext(Dispatchers.IO) {
@@ -65,23 +195,39 @@ class AIProviderManager(context: Context) {
         try {
             when (slot.providerPreset) {
                 "gemini" -> testGemini(slot)
+                "anthropic" -> testAnthropic(slot)
                 else -> testOpenAiCompatible(slot)
             }
             val latency = (System.currentTimeMillis() - startTime).toInt()
-            val updated = slot.copy(status = "CONNECTED", lastLatencyMs = latency)
+            val timeStamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            val updated = slot.copy(status = "Connected", lastLatencyMs = latency, lastTested = timeStamp)
             updateSlotInMemory(updated)
-            Triple("CONNECTED", latency, null)
+            keyStore.saveProviders(providerSlots)
+            Triple("Connected", latency, null)
         } catch (e: Exception) {
-            val updated = slot.copy(status = "ERROR", lastLatencyMs = null)
+            val timeStamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            val updated = slot.copy(status = "Connection Failed", lastLatencyMs = null, lastTested = timeStamp)
             updateSlotInMemory(updated)
-            Triple("ERROR", null, e.message ?: "Connection failed")
+            keyStore.saveProviders(providerSlots)
+            Triple("Connection Failed", null, e.message ?: "Connection failed")
         }
     }
 
-    private fun updateSlotInMemory(slot: ProviderSlot) {
-        val index = providerSlots.indexOfFirst { it.id == slot.id }
-        if (index != -1) {
-            providerSlots[index] = slot
+    suspend fun testChat(slotId: Int, testMessage: String = "Hello V.E.D.A."): Result<Triple<String, Int, String>> = withContext(Dispatchers.IO) {
+        val slot = providerSlots.firstOrNull { it.id == slotId }
+            ?: return@withContext Result.failure(Exception("Provider not found"))
+
+        val startTime = System.currentTimeMillis()
+        try {
+            val responseText = when (slot.providerPreset) {
+                "gemini" -> executeSingleGemini(slot, testMessage)
+                "anthropic" -> executeSingleAnthropic(slot, testMessage)
+                else -> executeSingleOpenAiCompatible(slot, testMessage)
+            }
+            val latency = (System.currentTimeMillis() - startTime).toInt()
+            Result.success(Triple(responseText, latency, slot.model))
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 
@@ -90,22 +236,122 @@ class AIProviderManager(context: Context) {
         val req = Request.Builder().url(url).get().build()
         httpClient.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
-                throw IOException("Gemini API error (HTTP " + resp.code + "): " + (resp.body?.string() ?: ""))
+                throw IOException("Gemini API error (HTTP ${resp.code}): " + (resp.body?.string() ?: ""))
+            }
+        }
+    }
+
+    private fun testAnthropic(slot: ProviderSlot) {
+        val base = if (slot.baseUrl.isNotBlank()) slot.baseUrl.trimEnd('/') else "https://api.anthropic.com/v1"
+        val url = "$base/models"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("x-api-key", slot.apiKey.trim())
+            .addHeader("anthropic-version", "2023-06-01")
+            .get()
+            .build()
+        httpClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                throw IOException("Anthropic HTTP ${resp.code}: " + (resp.body?.string() ?: ""))
             }
         }
     }
 
     private fun testOpenAiCompatible(slot: ProviderSlot) {
         val base = if (slot.baseUrl.isNotBlank()) slot.baseUrl.trimEnd('/') else "https://api.openai.com/v1"
-        val url = base + "/models"
+        val url = "$base/models"
         val reqBuilder = Request.Builder().url(url).get()
-        if (slot.apiKey.isNotBlank()) {
+        if (slot.apiKey.isNotBlank() && slot.providerPreset != "ollama") {
             reqBuilder.addHeader("Authorization", "Bearer " + slot.apiKey.trim())
         }
         httpClient.newCall(reqBuilder.build()).execute().use { resp ->
             if (!resp.isSuccessful) {
-                throw IOException("API error (HTTP " + resp.code + "): " + (resp.body?.string() ?: ""))
+                throw IOException("API error (HTTP ${resp.code}): " + (resp.body?.string() ?: ""))
             }
+        }
+    }
+
+    private fun executeSingleGemini(slot: ProviderSlot, prompt: String): String {
+        val model = if (slot.model.isNotBlank()) slot.model else "gemini-2.0-flash"
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=" + slot.apiKey.trim()
+
+        val body = JSONObject().apply {
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+            }))
+        }.toString().toRequestBody("application/json".toMediaType())
+
+        val req = Request.Builder().url(url).post(body).build()
+        httpClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}: " + (resp.body?.string() ?: ""))
+            val json = JSONObject(resp.body?.string() ?: "{}")
+            val cand = json.optJSONArray("candidates")?.getJSONObject(0)
+            val parts = cand?.optJSONObject("content")?.optJSONArray("parts")
+            return parts?.getJSONObject(0)?.optString("text", "No text received") ?: "Empty response"
+        }
+    }
+
+    private fun executeSingleAnthropic(slot: ProviderSlot, prompt: String): String {
+        val base = if (slot.baseUrl.isNotBlank()) slot.baseUrl.trimEnd('/') else "https://api.anthropic.com/v1"
+        val url = "$base/messages"
+        val model = if (slot.model.isNotBlank()) slot.model else "claude-3-5-sonnet-20241022"
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put("max_tokens", 256)
+            put("messages", JSONArray().put(JSONObject().apply {
+                put("role", "user")
+                put("content", prompt)
+            }))
+        }.toString().toRequestBody("application/json".toMediaType())
+
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("x-api-key", slot.apiKey.trim())
+            .addHeader("anthropic-version", "2023-06-01")
+            .post(body)
+            .build()
+
+        httpClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}: " + (resp.body?.string() ?: ""))
+            val json = JSONObject(resp.body?.string() ?: "{}")
+            val content = json.optJSONArray("content")?.getJSONObject(0)
+            return content?.optString("text", "No response text") ?: "Empty response"
+        }
+    }
+
+    private fun executeSingleOpenAiCompatible(slot: ProviderSlot, prompt: String): String {
+        val base = if (slot.baseUrl.isNotBlank()) slot.baseUrl.trimEnd('/') else "https://api.openai.com/v1"
+        val url = "$base/chat/completions"
+        val model = if (slot.model.isNotBlank()) slot.model else "gpt-4o"
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put("max_tokens", 256)
+            put("messages", JSONArray().put(JSONObject().apply {
+                put("role", "user")
+                put("content", prompt)
+            }))
+        }.toString().toRequestBody("application/json".toMediaType())
+
+        val reqBuilder = Request.Builder().url(url).post(body)
+        if (slot.apiKey.isNotBlank() && slot.providerPreset != "ollama") {
+            reqBuilder.addHeader("Authorization", "Bearer " + slot.apiKey.trim())
+        }
+
+        httpClient.newCall(reqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}: " + (resp.body?.string() ?: ""))
+            val json = JSONObject(resp.body?.string() ?: "{}")
+            val choice = json.optJSONArray("choices")?.getJSONObject(0)
+            val msg = choice?.optJSONObject("message")
+            return msg?.optString("content", "No response text") ?: "Empty response"
+        }
+    }
+
+    private fun updateSlotInMemory(slot: ProviderSlot) {
+        val index = providerSlots.indexOfFirst { it.id == slot.id }
+        if (index != -1) {
+            providerSlots[index] = slot
         }
     }
 
@@ -172,9 +418,7 @@ class AIProviderManager(context: Context) {
                             }
                         }
                     }
-                } catch (e: Exception) {
-                    // JSON partial chunk parsing
-                }
+                } catch (e: Exception) {}
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
@@ -197,7 +441,7 @@ class AIProviderManager(context: Context) {
         flowScope: kotlinx.coroutines.channels.ProducerScope<String>
     ) {
         val base = if (slot.baseUrl.isNotBlank()) slot.baseUrl.trimEnd('/') else "https://api.openai.com/v1"
-        val url = base + "/chat/completions"
+        val url = "$base/chat/completions"
         val model = if (slot.model.isNotBlank()) slot.model else "gpt-4o"
 
         val msgArray = JSONArray()
@@ -214,7 +458,7 @@ class AIProviderManager(context: Context) {
 
         val reqBody = bodyJson.toString().toRequestBody("application/json".toMediaType())
         val reqBuilder = Request.Builder().url(url).post(reqBody)
-        if (slot.apiKey.isNotBlank()) {
+        if (slot.apiKey.isNotBlank() && slot.providerPreset != "ollama") {
             reqBuilder.addHeader("Authorization", "Bearer " + slot.apiKey.trim())
         }
 
@@ -234,9 +478,7 @@ class AIProviderManager(context: Context) {
                             flowScope.trySend(text)
                         }
                     }
-                } catch (e: Exception) {
-                    // Ignore parse errors on SSE events
-                }
+                } catch (e: Exception) {}
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {

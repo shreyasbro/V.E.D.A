@@ -1,0 +1,67 @@
+name: Release Android V.E.D.A.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
+
+      - name: Extract Tag & Clean Version
+        id: get_version
+        run: |
+          TAG="${{ github.ref_name }}"
+          CLEAN="${TAG#v}"
+          CLEAN="${CLEAN#V}"
+          echo "VERSION=$CLEAN" >> $GITHUB_OUTPUT
+          echo "TAG_NAME=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Build Android APK
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare APK Asset and Generate SHA-256
+        run: |
+          VER="${{ steps.get_version.outputs.VERSION }}"
+          APK_NAME="VEDA-Android-v${VER}.apk"
+          SHA_NAME="VEDA-Android-v${VER}.apk.sha256"
+          
+          mkdir -p release-assets
+          cp android/app/build/outputs/apk/debug/app-debug.apk "release-assets/${APK_NAME}"
+          
+          cd release-assets
+          sha256sum "${APK_NAME}" > "${SHA_NAME}"
+          echo "Generated checksum:"
+          cat "${SHA_NAME}"
+
+      - name: Upload APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "V.E.D.A. Release ${{ steps.get_version.outputs.TAG_NAME }}"
+          files: |
+            release-assets/VEDA-Android-v${{ steps.get_version.outputs.VERSION }}.apk
+            release-assets/VEDA-Android-v${{ steps.get_version.outputs.VERSION }}.apk.sha256
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

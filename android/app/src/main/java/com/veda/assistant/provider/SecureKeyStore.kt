@@ -21,7 +21,7 @@ class SecureKeyStore(context: Context) {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
     } catch (e: Exception) {
-        // Fallback to standard private preferences if device lacks Keystore hardware
+        // Fallback to private preferences if Keystore hardware is unavailable
         context.getSharedPreferences("veda_secure_providers_fb", Context.MODE_PRIVATE)
     }
 
@@ -37,6 +37,12 @@ class SecureKeyStore(context: Context) {
                 put("enabled", slot.enabled)
                 put("isPrimary", slot.isPrimary)
                 put("providerPreset", slot.providerPreset)
+                put("status", slot.status)
+                if (slot.lastLatencyMs != null) put("lastLatencyMs", slot.lastLatencyMs)
+                if (slot.lastTested != null) put("lastTested", slot.lastTested)
+                val modelsArr = JSONArray()
+                slot.availableModels.forEach { modelsArr.put(it) }
+                put("availableModels", modelsArr)
             }
             array.put(obj)
         }
@@ -54,6 +60,14 @@ class SecureKeyStore(context: Context) {
             val list = mutableListOf<ProviderSlot>()
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
+                val modelsList = mutableListOf<String>()
+                val modelsArr = obj.optJSONArray("availableModels")
+                if (modelsArr != null) {
+                    for (j in 0 until modelsArr.length()) {
+                        modelsList.add(modelsArr.getString(j))
+                    }
+                }
+
                 list.add(
                     ProviderSlot(
                         id = obj.getInt("id"),
@@ -63,8 +77,11 @@ class SecureKeyStore(context: Context) {
                         apiKey = obj.optString("apiKey", ""),
                         enabled = obj.optBoolean("enabled", true),
                         isPrimary = obj.optBoolean("isPrimary", i == 0),
-                        status = "IDLE",
-                        providerPreset = obj.optString("providerPreset", "custom")
+                        status = obj.optString("status", "Not Tested"),
+                        lastLatencyMs = if (obj.has("lastLatencyMs") && !obj.isNull("lastLatencyMs")) obj.getInt("lastLatencyMs") else null,
+                        lastTested = if (obj.has("lastTested") && !obj.isNull("lastTested")) obj.getString("lastTested") else null,
+                        providerPreset = obj.optString("providerPreset", "custom"),
+                        availableModels = modelsList
                     )
                 )
             }
@@ -84,7 +101,8 @@ class SecureKeyStore(context: Context) {
                 apiKey = "",
                 enabled = true,
                 isPrimary = true,
-                providerPreset = "gemini"
+                providerPreset = "gemini",
+                availableModels = listOf("gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro")
             ),
             ProviderSlot(
                 id = 2,
@@ -94,7 +112,8 @@ class SecureKeyStore(context: Context) {
                 apiKey = "",
                 enabled = true,
                 isPrimary = false,
-                providerPreset = "openai"
+                providerPreset = "openai",
+                availableModels = listOf("gpt-4o", "gpt-4o-mini", "gpt-4-turbo")
             ),
             ProviderSlot(
                 id = 3,
@@ -104,27 +123,30 @@ class SecureKeyStore(context: Context) {
                 apiKey = "",
                 enabled = true,
                 isPrimary = false,
-                providerPreset = "anthropic"
+                providerPreset = "anthropic",
+                availableModels = listOf("claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022")
             ),
             ProviderSlot(
                 id = 4,
-                name = "Groq Llama 3",
+                name = "Groq",
                 model = "llama-3.3-70b-versatile",
                 baseUrl = "https://api.groq.com/openai/v1",
                 apiKey = "",
                 enabled = true,
                 isPrimary = false,
-                providerPreset = "groq"
+                providerPreset = "groq",
+                availableModels = listOf("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768")
             ),
             ProviderSlot(
                 id = 5,
                 name = "Ollama Local API",
                 model = "llama3.2",
-                baseUrl = "http://localhost:11434/v1",
+                baseUrl = "http://10.0.2.2:11434/v1",
                 apiKey = "ollama",
                 enabled = false,
                 isPrimary = false,
-                providerPreset = "ollama"
+                providerPreset = "ollama",
+                availableModels = listOf("llama3.2", "llama3.1", "mistral", "qwen2.5")
             ),
             ProviderSlot(
                 id = 6,
@@ -134,7 +156,8 @@ class SecureKeyStore(context: Context) {
                 apiKey = "",
                 enabled = false,
                 isPrimary = false,
-                providerPreset = "custom"
+                providerPreset = "custom",
+                availableModels = emptyList()
             )
         )
     }

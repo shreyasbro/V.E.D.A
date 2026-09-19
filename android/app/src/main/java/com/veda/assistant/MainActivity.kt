@@ -17,6 +17,7 @@ import com.veda.assistant.ui.screens.SettingsScreen
 import com.veda.assistant.ui.theme.VedaTheme
 import com.veda.assistant.voice.KokoroTTSEngine
 import com.veda.assistant.voice.VoiceController
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -55,6 +56,21 @@ class MainActivity : ComponentActivity() {
         ttsEngine = KokoroTTSEngine(this)
         voiceController = VoiceController(this, ttsEngine)
         cameraManager = CameraManager(this)
+
+        // Background OTA check if enabled
+        val updater = com.veda.assistant.updater.GitHubReleaseUpdater(this)
+        if (updater.autoCheckEnabled) {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                try {
+                    val result = updater.checkForUpdates()
+                    result.getOrNull()?.let { (hasUpdate, rel) ->
+                        if (hasUpdate && rel != null && updater.autoDownloadEnabled) {
+                            updater.downloadAndVerifyApk(rel) { /* background download */ }
+                        }
+                    }
+                } catch (ignored: Exception) {}
+            }
+        }
 
         setContent {
             VedaTheme {

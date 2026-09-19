@@ -8,9 +8,11 @@ data class ProviderSlot(
     val apiKey: String = "",
     val enabled: Boolean = true,
     val isPrimary: Boolean = false,
-    val status: String = "IDLE", // "CONNECTED", "ERROR", "UNAVAILABLE", "IDLE"
+    val status: String = "Not Tested", // "Connected", "Connection Failed", "Not Tested", "Testing..."
     val lastLatencyMs: Int? = null,
-    val providerPreset: String = "custom" // "gemini", "openai", "anthropic", "groq", "ollama", "custom"
+    val lastTested: String? = null,
+    val providerPreset: String = "custom", // "gemini", "openai", "anthropic", "groq", "ollama", "custom"
+    val availableModels: List<String> = emptyList()
 ) {
     fun maskedApiKey(): String {
         if (apiKey.isBlank()) return "Not configured"
