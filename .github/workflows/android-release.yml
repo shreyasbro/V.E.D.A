@@ -2,6 +2,8 @@ name: Release Android V.E.D.A.
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
@@ -10,6 +12,7 @@ permissions:
 
 jobs:
   build-android:
+    if: github.ref_type == 'tag' || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, 'release(android): v1.0.2'))
     runs-on: ubuntu-latest
 
     steps:
@@ -26,14 +29,19 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
-      - name: Extract Tag & Clean Version
+      - name: Extract Release Tag & Version
         id: get_version
+        shell: bash
         run: |
-          TAG="${{ github.ref_name }}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v1.0.2"
+          fi
           CLEAN="${TAG#v}"
           CLEAN="${CLEAN#V}"
-          echo "VERSION=$CLEAN" >> $GITHUB_OUTPUT
-          echo "TAG_NAME=$TAG" >> $GITHUB_OUTPUT
+          echo "VERSION=$CLEAN" >> "$GITHUB_OUTPUT"
+          echo "TAG_NAME=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build Android APK
         run: |
@@ -44,23 +52,35 @@ jobs:
         run: |
           APK_NAME="VEDA-Mobile.apk"
           SHA_NAME="VEDA-Mobile.apk.sha256"
-          
           mkdir -p release-assets
           cp android/app/build/outputs/apk/debug/app-debug.apk "release-assets/${APK_NAME}"
-          
           cd release-assets
           sha256sum "${APK_NAME}" > "${SHA_NAME}"
-          echo "Generated checksum:"
           cat "${SHA_NAME}"
 
-      - name: Upload APK to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.get_version.outputs.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           name: "V.E.D.A. Release ${{ steps.get_version.outputs.TAG_NAME }}"
+          body: |
+            ## V.E.D.A. v1.0.2
+
+            ### What's New
+            - Fixed the Gemini callbackFlow lifecycle error.
+            - Ensured awaitClose is terminal in callbackFlow blocks.
+            - Improved Gemini/SSE listener cleanup and cancellation handling.
+            - Updated Android version metadata to 1.0.2.
+
+            ### Android
+            - VEDA-Mobile.apk
+            - SHA-256 checksum included.
+
           files: |
             release-assets/VEDA-Mobile.apk
             release-assets/VEDA-Mobile.apk.sha256
           draft: false
           prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
