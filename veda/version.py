@@ -6,8 +6,8 @@ and semantic versioning helpers.
 
 from typing import Tuple
 
-VERSION = "1.0.0"
-BUILD = 1000
+VERSION = "1.0.2"
+BUILD = 1002
 RELEASE_CHANNEL = "Stable"
 APP_TITLE = f"V.E.D.A. {VERSION}"
 
