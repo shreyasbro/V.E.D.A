@@ -75,4 +75,14 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.json:json:20240303")
+
+    // Security & Keystore for Encrypted Provider storage
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // WorkManager for background automations and tasks
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // Storage Access Framework DocumentFile
+    implementation("androidx.documentfile:documentfile:1.0.1")
+
 }

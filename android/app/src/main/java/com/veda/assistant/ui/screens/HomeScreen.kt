@@ -30,28 +30,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.veda.assistant.agent.AgentCore
 import com.veda.assistant.camera.CameraManager
-import com.veda.assistant.data.api.VedaApiClient
 import com.veda.assistant.data.model.ChatMessage
-import com.veda.assistant.data.model.ServerStatus
 import com.veda.assistant.ui.theme.*
-import com.veda.assistant.voice.TtsManager
-import com.veda.assistant.voice.VoiceManager
+import com.veda.assistant.voice.KokoroTTSEngine
+import com.veda.assistant.voice.MicState
+import com.veda.assistant.voice.VoiceController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
-    apiClient: VedaApiClient,
-    voiceManager: VoiceManager,
-    ttsManager: TtsManager,
+    agentCore: AgentCore,
+    voiceController: VoiceController,
+    ttsEngine: KokoroTTSEngine,
     cameraManager: CameraManager,
     micAllowed: Boolean,
     cameraAllowed: Boolean,
     onRequestMicPermission: () -> Unit,
     onRequestCameraPermission: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onOpenPermissions: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -64,486 +65,409 @@ fun HomeScreen(
     var streamJob by remember { mutableStateOf<Job?>(null) }
     var interimTranscript by remember { mutableStateOf("") }
 
-    var serverStatus by remember {
-        mutableStateOf(
-            ServerStatus(
-                status = "offline",
-                activeProvider = "Checking...",
-                providerMode = "AUTO",
-                selectedProvider = "GEMINI",
-                desktopConnected = false,
-                pairingPin = ""
-            )
-        )
-    }
-
+    val micState by voiceController.micState.collectAsState()
+    val micRms by voiceController.micRms.collectAsState()
     var isCameraActive by remember { mutableStateOf(false) }
-    val micLevel by voiceManager.micLevel.collectAsState()
 
-    // Status poll loop
     LaunchedEffect(Unit) {
-        // Welcome message
         messages.add(
             ChatMessage(
                 sender = "assistant",
-                content = "Hello! Main V.E.D.A. hoon (Virtual Executive Desktop Assistant).\nMobile edition ready. Ask me anything or speak naturally in Hindi, Hinglish, or English.",
+                content = "Hello! Main V.E.D.A. hoon — Standalone Native Mobile Assistant.\n" +
+                        "Running entirely on this Android phone with genuine tool execution, Kokoro TTS, and Keystore encryption.\n\n" +
+                        "Try asking me in Hindi, Hinglish, or English:\n" +
+                        "• \"Open WhatsApp\"\n" +
+                        "• \"Check battery status\"\n" +
+                        "• \"Copy 'Hello VEDA' to clipboard\"\n" +
+                        "• \"Find files in downloads\"",
                 provider = "V.E.D.A. Mobile"
             )
         )
 
-        while (true) {
-            val res = apiClient.fetchStatus()
-            res.onSuccess { serverStatus = it }
-            kotlinx.coroutines.delay(5000)
-        }
-    }
+        voiceController.onFinalSpeech = { speech ->
+            inputText = speech
+            interimTranscript = ""
+            // Auto send speech
+            if (speech.isNotBlank()) {
+                coroutineScope.launch {
+                    val userMsg = ChatMessage(sender = "user", content = speech)
+                    messages.add(userMsg)
+                    inputText = ""
+                    listState.animateScrollToItem(messages.size - 1)
 
-    // Voice manager bindings
-    DisposableEffect(Unit) {
-        voiceManager.onTranscriptReceived = { text, isFinal ->
-            if (isFinal) {
-                interimTranscript = ""
-                inputText = text
-            } else {
-                interimTranscript = text
-            }
-        }
-        onDispose {
-            voiceManager.stopListening()
-        }
-    }
-
-    fun sendMessage(userText: String) {
-        if (userText.isBlank() || isStreaming) return
-
-        val trimmed = userText.trim()
-        inputText = ""
-        interimTranscript = ""
-
-        messages.add(ChatMessage(sender = "user", content = trimmed))
-        val assistantMsg = ChatMessage(
-            sender = "assistant",
-            content = "",
-            isStreaming = true,
-            provider = serverStatus.activeProvider
-        )
-        messages.add(assistantMsg)
-        val assistantIdx = messages.lastIndex
-        isStreaming = true
-
-        streamJob?.cancel()
-        streamJob = coroutineScope.launch {
-            val historyPairs = messages.dropLast(2).map { Pair(it.sender, it.content) }
-            val accumulated = StringBuilder()
-
-            try {
-                apiClient.streamChat(trimmed, historyPairs).collectLatest { (chunk, prov) ->
-                    accumulated.append(chunk)
-                    messages[assistantIdx] = messages[assistantIdx].copy(
-                        content = accumulated.toString(),
-                        provider = prov,
+                    isStreaming = true
+                    val assistantMsg = ChatMessage(
+                        sender = "assistant",
+                        content = "",
+                        provider = agentCore.providerManager.getActiveProvider()?.name ?: "V.E.D.A.",
                         isStreaming = true
                     )
-                    listState.animateScrollToItem(messages.lastIndex)
+                    messages.add(assistantMsg)
+                    val assistantIndex = messages.size - 1
+
+                    streamJob = launch {
+                        agentCore.processUserMessageStream(
+                            userText = speech,
+                            onToolActionStart = {},
+                            onToolActionComplete = { _, _ -> }
+                        ).collectLatest { chunk ->
+                            val current = messages[assistantIndex]
+                            messages[assistantIndex] = current.copy(content = current.content + chunk)
+                            listState.animateScrollToItem(messages.size - 1)
+                        }
+                        messages[assistantIndex] = messages[assistantIndex].copy(isStreaming = false)
+                        isStreaming = false
+                        ttsEngine.speak(messages[assistantIndex].content)
+                    }
                 }
-            } catch (e: Exception) {
-                accumulated.append("\n[Connection fallback: using offline response]")
-            } finally {
-                val finalContent = accumulated.toString().ifBlank { "Received response." }
-                messages[assistantIdx] = messages[assistantIdx].copy(
-                    content = finalContent,
-                    isStreaming = false
-                )
+            }
+        }
+
+        voiceController.onInterimSpeech = { interim ->
+            interimTranscript = interim
+        }
+    }
+
+    fun handleSend(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || isStreaming) return
+
+        ttsEngine.stop()
+        inputText = ""
+        messages.add(ChatMessage(sender = "user", content = trimmed))
+
+        coroutineScope.launch {
+            listState.animateScrollToItem(messages.size - 1)
+            isStreaming = true
+
+            val assistantMsg = ChatMessage(
+                sender = "assistant",
+                content = "",
+                provider = agentCore.providerManager.getActiveProvider()?.name ?: "V.E.D.A.",
+                isStreaming = true
+            )
+            messages.add(assistantMsg)
+            val assistantIndex = messages.size - 1
+
+            streamJob = launch {
+                agentCore.processUserMessageStream(trimmed).collectLatest { chunk ->
+                    val current = messages[assistantIndex]
+                    messages[assistantIndex] = current.copy(content = current.content + chunk)
+                    listState.animateScrollToItem(messages.size - 1)
+                }
+                messages[assistantIndex] = messages[assistantIndex].copy(isStreaming = false)
                 isStreaming = false
-                // Auto-speak response if mic was used
-                val isHindi = finalContent.any { it in '\u0900'..'\u097F' }
-                ttsManager.speak(finalContent, isHindi)
+                ttsEngine.speak(messages[assistantIndex].content)
             }
         }
     }
 
-    fun handleVisualQuery(promptText: String) {
-        if (!isCameraActive) return
-        cameraManager.captureFrameBase64(
-            onCaptured = { base64 ->
-                coroutineScope.launch {
-                    messages.add(ChatMessage(sender = "user", content = "[Camera Query] " + promptText))
-                    val assistantMsg = ChatMessage(sender = "assistant", content = "Analyzing camera frame...", isStreaming = true)
-                    messages.add(assistantMsg)
-                    val idx = messages.lastIndex
-
-                    val res = apiClient.analyzeImage(base64, promptText)
-                    res.onSuccess { ans ->
-                        messages[idx] = messages[idx].copy(content = ans, isStreaming = false)
-                        ttsManager.speak(ans)
-                    }.onFailure { err ->
-                        messages[idx] = messages[idx].copy(content = "Camera analysis error: " + err.message, isStreaming = false)
-                    }
-                }
-            },
-            onError = { err ->
-                messages.add(ChatMessage(sender = "assistant", content = "Failed to capture camera frame: " + err.message))
-            }
-        )
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(DarkBackground)
-    ) {
-        // 1. TOP HEADER & BRANDING
-        Surface(
-            color = DarkSurface,
-            modifier = Modifier.fillMaxWidth(),
-            shadowElevation = 4.dp
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+    Scaffold(
+        topBar = {
+            Surface(color = DarkSurface, shadowElevation = 4.dp) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "V.E.D.A.",
-                            color = VedaCyan,
-                            fontSize = 20.sp,
+                            text = "◈",
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
+                            color = VedaCyan
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "V.E.D.A.",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = VedaCyan,
                             fontFamily = FontFamily.Monospace
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            "| " + serverStatus.activeProvider.uppercase(),
-                            color = TextSecondary,
+                            text = "Mobile",
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            color = TextSecondary,
                             fontFamily = FontFamily.Monospace
                         )
                     }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Online / Offline Status Badge
-                        val isOnline = serverStatus.status == "online"
-                        Box(
-                            modifier = Modifier
-                                .background(
-                                    if (isOnline) VedaEmerald.copy(alpha = 0.2f) else VedaAmber.copy(alpha = 0.2f),
-                                    RoundedCornerShape(12.dp)
-                                )
-                                .border(
-                                    1.dp,
-                                    if (isOnline) VedaEmerald else VedaAmber,
-                                    RoundedCornerShape(12.dp)
-                                )
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Provider Pill
+                        val activeProv = agentCore.providerManager.getActiveProvider()
+                        Surface(
+                            shape = CircleShape,
+                            color = if (activeProv != null) Color(0xFF065f46) else Color(0xFF1e293b),
+                            modifier = Modifier.clickable { onOpenSettings() }
                         ) {
                             Text(
-                                if (isOnline) "● ONLINE" else "○ LOCAL/OFFLINE",
-                                color = if (isOnline) VedaEmerald else VedaAmber,
-                                fontSize = 11.sp,
+                                text = "◆ " + (activeProv?.name ?: "No Provider"),
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
+                                color = if (activeProv != null) Color(0xFF34d399) else Color(0xFF94a3b8),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        // Camera Toggle
+                        IconButton(
+                            onClick = {
+                                if (!cameraAllowed) {
+                                    onRequestCameraPermission()
+                                } else {
+                                    isCameraActive = !isCameraActive
+                                }
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.CameraAlt,
+                                contentDescription = "Camera",
+                                tint = if (isCameraActive) VedaCyan else TextMuted
+                            )
+                        }
 
-                        IconButton(onClick = onOpenSettings) {
+                        // Settings Icon
+                        IconButton(
+                            onClick = onOpenSettings,
+                            modifier = Modifier.size(32.dp)
+                        ) {
                             Icon(Icons.Default.Settings, contentDescription = "Settings", tint = TextSecondary)
                         }
                     }
                 }
-
-                // Sub-header status pills: Mic & Camera
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            }
+        },
+        containerColor = DarkBackground
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            // Camera Preview Box if active
+            AnimatedVisibility(visible = isCameraActive && cameraAllowed) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp)
+                        .background(Color.Black)
                 ) {
-                    StatusChip(
-                        label = "MIC",
-                        isActive = voiceManager.isListening(),
-                        activeColor = VedaRed
+                    AndroidView(
+                        factory = { ctx ->
+                            PreviewView(ctx).apply {
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                                cameraManager.startCamera(
+                                    lifecycleOwner = lifecycleOwner,
+                                    surfaceProvider = surfaceProvider
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
                     )
-                    StatusChip(
-                        label = "CAM",
-                        isActive = isCameraActive,
-                        activeColor = VedaCyan
-                    )
-                    if (serverStatus.desktopConnected) {
-                        StatusChip(
-                            label = "DESKTOP PAIRED",
-                            isActive = true,
-                            activeColor = VedaEmerald
-                        )
+                }
+            }
+
+            // Message List
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(messages, key = { it.id }) { msg ->
+                    val isUser = msg.sender == "user"
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isUser) Color(0xFF0369a1) else DarkCard,
+                            border = if (!isUser) androidx.compose.foundation.BorderStroke(1.dp, DarkBorder) else null,
+                            modifier = Modifier.widthIn(max = 320.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                if (!isUser) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            "◈ " + msg.provider,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = VedaCyan
+                                        )
+                                        Icon(
+                                            Icons.Default.ContentCopy,
+                                            contentDescription = "Copy",
+                                            tint = TextMuted,
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clickable {
+                                                    clipboardManager.setText(AnnotatedString(msg.content))
+                                                }
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                }
+                                Text(
+                                    text = msg.content,
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                            }
+                        }
                     }
                 }
             }
-        }
 
-        // 2. OPTIONAL CAMERA PREVIEW OVERLAY
-        AnimatedVisibility(visible = isCameraActive) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(200.dp)
-                    .background(Color.Black)
-            ) {
-                AndroidView(
-                    factory = { ctx ->
-                        val previewView = PreviewView(ctx).apply {
-                            layoutParams = ViewGroup.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
-                        }
-                        cameraManager.startCamera(
-                            lifecycleOwner = lifecycleOwner,
-                            surfaceProvider = previewView.surfaceProvider
-                        )
-                        previewView
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Capture Frame button
-                Button(
-                    onClick = { handleVisualQuery(inputText.ifBlank { "Describe what is visible in front of the camera" }) },
-                    colors = ButtonDefaults.buttonColors(containerColor = VedaCyan),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(12.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = Color.Black)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Analyze Frame", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-            }
-        }
-
-        // 3. CHAT STREAM / MESSAGE LIST
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp),
-            contentPadding = PaddingValues(vertical = 8.dp)
-        ) {
-            items(messages) { msg ->
-                val isUser = msg.sender == "user"
+            // Waveform & Mic State Indicator Bar
+            Surface(color = DarkSurface, modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isUser) VedaCyan.copy(alpha = 0.15f) else DarkCard
-                        ),
-                        border = if (isUser) androidx.compose.foundation.BorderStroke(1.dp, VedaCyan.copy(alpha = 0.4f)) else null,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.widthIn(max = 320.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            if (!isUser) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "V.E.D.A. • " + msg.provider,
-                                        fontSize = 11.sp,
-                                        color = VedaCyan,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                    Row {
-                                        IconButton(
-                                            onClick = { clipboardManager.setText(AnnotatedString(msg.content)) },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = TextMuted, modifier = Modifier.size(14.dp))
-                                        }
-                                        IconButton(
-                                            onClick = { ttsManager.speak(msg.content) },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(Icons.Default.VolumeUp, contentDescription = "Speak", tint = TextMuted, modifier = Modifier.size(14.dp))
-                                        }
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(4.dp))
-                            }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val stateColor = Color(android.graphics.Color.parseColor(micState.colorHex))
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(stateColor)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = micState.label,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = stateColor,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        if (interimTranscript.isNotEmpty()) {
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                msg.content,
-                                color = TextPrimary,
-                                fontSize = 14.sp,
-                                lineHeight = 20.sp
+                                text = "\"$interimTranscript\"",
+                                fontSize = 10.sp,
+                                color = TextSecondary,
+                                maxLines = 1
                             )
                         }
                     }
+
+                    // Genuine Hardware RMS level bar
+                    LinearProgressIndicator(
+                        progress = { micRms },
+                        modifier = Modifier
+                            .width(80.dp)
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = VedaCyan,
+                        trackColor = Color(0xFF1e293b)
+                    )
                 }
             }
-        }
 
-        // Interim voice speech indicator
-        if (interimTranscript.isNotBlank()) {
-            Text(
-                "Hearing: " + interimTranscript,
-                color = VedaCyan,
-                fontSize = 12.sp,
+            // Bottom Input Dock
+            Surface(
+                color = DarkCard,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(DarkCard)
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-        }
-
-        // Live Audio Amplitude RMS Meter Bar
-        if (voiceManager.isListening()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DarkSurface)
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .imePadding()
             ) {
-                Text("MIC LEVEL", color = VedaRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.width(8.dp))
-                LinearProgressIndicator(
-                    progress = { micLevel },
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = VedaRed,
-                    trackColor = BorderDark
-                )
-            }
-        }
-
-        // 4. INPUT DOCK (TEXT + VOICE + CAMERA TOGGLES)
-        Surface(
-            color = DarkSurface,
-            modifier = Modifier.fillMaxWidth(),
-            shadowElevation = 8.dp
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Camera Toggle
-                IconButton(
-                    onClick = {
-                        if (!cameraAllowed) {
-                            onRequestCameraPermission()
-                        } else {
-                            isCameraActive = !isCameraActive
-                            if (!isCameraActive) {
-                                cameraManager.stopCamera(lifecycleOwner)
-                            }
-                        }
-                    }
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        if (isCameraActive) Icons.Default.VideocamOff else Icons.Default.Videocam,
-                        contentDescription = "Camera",
-                        tint = if (isCameraActive) VedaCyan else TextSecondary
-                    )
-                }
-
-                // Text Input Field
-                OutlinedTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    placeholder = { Text("Ask V.E.D.A. or command...", color = TextMuted, fontSize = 13.sp) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 4.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    maxLines = 3,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = VedaCyan,
-                        unfocusedBorderColor = BorderDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
-                        focusedContainerColor = DarkCard,
-                        unfocusedContainerColor = DarkCard
-                    )
-                )
-
-                // Voice Recording Toggle
-                IconButton(
-                    onClick = {
-                        if (!micAllowed) {
-                            onRequestMicPermission()
-                        } else {
-                            if (voiceManager.isListening()) {
-                                voiceManager.stopListening()
-                            } else {
-                                ttsManager.stop()
-                                voiceManager.startListening()
-                            }
-                        }
-                    }
-                ) {
-                    Icon(
-                        if (voiceManager.isListening()) Icons.Default.MicOff else Icons.Default.Mic,
-                        contentDescription = "Voice",
-                        tint = if (voiceManager.isListening()) VedaRed else VedaCyan
-                    )
-                }
-
-                // Send or Stop Button
-                if (isStreaming) {
+                    // Voice Mic Button
                     IconButton(
                         onClick = {
-                            streamJob?.cancel()
-                            isStreaming = false
-                        }
+                            if (!micAllowed) {
+                                onRequestMicPermission()
+                            } else {
+                                voiceController.toggleListening()
+                            }
+                        },
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(if (micState == MicState.HEARING) VedaCyan else Color(0xFF1e293b))
                     ) {
-                        Icon(Icons.Default.Stop, contentDescription = "Stop", tint = VedaAmber)
+                        Icon(
+                            Icons.Default.Mic,
+                            contentDescription = "Microphone",
+                            tint = if (micState == MicState.HEARING) DarkBackground else Color.White
+                        )
                     }
-                } else {
-                    IconButton(
-                        onClick = { sendMessage(inputText) }
-                    ) {
-                        Icon(Icons.Default.Send, contentDescription = "Send", tint = VedaCyan)
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        placeholder = { Text("Ask V.E.D.A. on Android...", fontSize = 13.sp, color = TextMuted) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 44.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = VedaCyan,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    if (isStreaming) {
+                        IconButton(
+                            onClick = {
+                                streamJob?.cancel()
+                                ttsEngine.stop()
+                                isStreaming = false
+                            },
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF991b1b))
+                        ) {
+                            Icon(Icons.Default.Stop, contentDescription = "Stop", tint = Color.White)
+                        }
+                    } else {
+                        IconButton(
+                            onClick = { handleSend(inputText) },
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF0284c7))
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = "Send", tint = Color.White)
+                        }
                     }
                 }
             }
         }
-    }
-}
-
-@Composable
-fun StatusChip(label: String, isActive: Boolean, activeColor: Color) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .background(DarkCard, RoundedCornerShape(8.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(6.dp)
-                .clip(CircleShape)
-                .background(if (isActive) activeColor else TextMuted)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-            label,
-            color = if (isActive) TextPrimary else TextMuted,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace
-        )
     }
 }

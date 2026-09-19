@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">V.E.D.A.</string>
+    <string name="accessibility_service_description">V.E.D.A. Assistant accessibility service enables automated UI interaction such as clicking controls, reading visible content, and navigation when explicitly requested by you.</string>
 </resources>

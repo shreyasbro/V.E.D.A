@@ -31,6 +31,15 @@ logs/
 venv/
 ENV/
 
+# Android build artifacts
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.apk.sha256
+
 # OS specific files
 Thumbs.db
 Desktop.ini
