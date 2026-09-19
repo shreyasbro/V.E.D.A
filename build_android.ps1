@@ -16,7 +16,7 @@ try {
 
     $outputApk = Join-Path $androidDir "app\build\outputs\apk\debug\app-debug.apk"
     if (Test-Path $outputApk) {
-        $finalApkName = "V.E.D.A.-Android.apk"
+        $finalApkName = "VEDA-Mobile.apk"
         $destApk = Join-Path $PSScriptRoot $finalApkName
         Copy-Item -Path $outputApk -Destination $destApk -Force
         

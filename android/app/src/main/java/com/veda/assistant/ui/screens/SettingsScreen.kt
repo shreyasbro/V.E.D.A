@@ -402,7 +402,7 @@ fun SettingsScreen(
                                                     modifier = Modifier.fillMaxWidth(),
                                                     horizontalArrangement = Arrangement.SpaceBetween
                                                 ) {
-                                                    Text("Downloading APK: ${prog.percent}%", fontSize = 11.sp, color = TextPrimary)
+                                                    Text("Downloading VEDA-Mobile.apk: ${prog.percent}%", fontSize = 11.sp, color = TextPrimary)
                                                     Text(
                                                         "${String.format("%.1f", prog.bytesDownloaded / (1024.0 * 1024.0))} MB / ${String.format("%.1f", prog.totalBytes / (1024.0 * 1024.0))} MB (${String.format("%.2f", prog.speedMbPerSec)} MB/s)",
                                                         fontSize = 10.sp,

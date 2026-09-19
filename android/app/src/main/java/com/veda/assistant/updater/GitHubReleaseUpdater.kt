@@ -41,7 +41,29 @@ data class DownloadProgress(
 
 class GitHubReleaseUpdater(private val context: Context) {
 
-    val currentVersion = "1.0.0"
+    val currentVersion: String by lazy {
+        try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            pInfo.versionName ?: "1.0.0"
+        } catch (e: Exception) {
+            "1.0.0"
+        }
+    }
+
+    val currentVersionCode: Long by lazy {
+        try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pInfo.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                pInfo.versionCode.toLong()
+            }
+        } catch (e: Exception) {
+            100L
+        }
+    }
+
     private val prefs: SharedPreferences = context.getSharedPreferences("veda_updater_prefs", Context.MODE_PRIVATE)
 
     private val client = OkHttpClient.Builder()
@@ -89,16 +111,32 @@ class GitHubReleaseUpdater(private val context: Context) {
                 var shaUrl: String? = null
 
                 if (assets != null) {
+                    // Pass 1: Look specifically for the single consistent asset name VEDA-Mobile.apk
                     for (i in 0 until assets.length()) {
                         val a = assets.getJSONObject(i)
                         val name = a.getString("name")
                         val dl = a.getString("browser_download_url")
-                        // Match Android APK and SHA256 assets (excluding Windows setup assets)
-                        if (name.endsWith(".apk", ignoreCase = true)) {
+                        if (name.equals("VEDA-Mobile.apk", ignoreCase = true)) {
                             apkUrl = dl
                             apkName = name
-                        } else if (name.contains("apk.sha256", ignoreCase = true) || (name.endsWith(".sha256", ignoreCase = true) && name.contains("android", ignoreCase = true))) {
+                        } else if (name.equals("VEDA-Mobile.apk.sha256", ignoreCase = true)) {
                             shaUrl = dl
+                        }
+                    }
+
+                    // Pass 2: Fallback to any other .apk if VEDA-Mobile.apk was not found (backward compatibility)
+                    if (apkUrl == null) {
+                        for (i in 0 until assets.length()) {
+                            val a = assets.getJSONObject(i)
+                            val name = a.getString("name")
+                            val dl = a.getString("browser_download_url")
+                            if (name.endsWith(".apk", ignoreCase = true)) {
+                                apkUrl = dl
+                                apkName = name
+                            } else if (name.contains("apk.sha256", ignoreCase = true) || 
+                                       (name.endsWith(".sha256", ignoreCase = true) && name.contains("mobile", ignoreCase = true))) {
+                                if (shaUrl == null) shaUrl = dl
+                            }
                         }
                     }
                 }
@@ -111,7 +149,7 @@ class GitHubReleaseUpdater(private val context: Context) {
                     publishedAt = pubAt,
                     htmlUrl = htmlUrl,
                     apkDownloadUrl = apkUrl,
-                    apkName = apkName,
+                    apkName = apkName ?: "VEDA-Mobile.apk",
                     sha256DownloadUrl = shaUrl
                 )
 
@@ -149,7 +187,7 @@ class GitHubReleaseUpdater(private val context: Context) {
             ?: return@withContext Result.failure(Exception("No APK asset found in this GitHub Release"))
 
         val targetDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
-        val apkFile = File(targetDir, release.apkName ?: "VEDA-Android-v${release.cleanVersion}.apk")
+        val apkFile = File(targetDir, "VEDA-Mobile.apk")
         if (apkFile.exists()) apkFile.delete()
 
         try {
