@@ -318,21 +318,26 @@ class GestureStateMachine:
     """
     Robust gesture state machine utilizing scale-invariant landmarks,
     hysteresis (enter/exit thresholds), and temporal confirmation windows.
+
+    Pinch State Machine:
+      IDLE -> PINCH_CANDIDATE -> PINCH_CONFIRMED -> CLICKED -> PINCH_HELD -> PINCH_RELEASE_CANDIDATE -> IDLE
     """
 
-    # Normalized scale-invariant pinch ratios:
+    # Scale-invariant pinch thresholds:
     # pinch_ratio = dist(thumb_tip, index_tip) / dist(index_mcp, pinky_mcp)
     PINCH_START_RATIO = 0.42      # Pinch closed threshold
-    PINCH_RELEASE_RATIO = 0.65    # Pinch opened threshold (hysteresis prevents chatter)
+    PINCH_RELEASE_RATIO = 0.65    # Pinch opened threshold (hysteresis)
+    PINCH_PRE_ANCHOR_RATIO = 0.55 # Pre-anchor threshold to lock cursor before full pinch contact
 
-    DRAG_HOLD_FRAMES = 4          # Consecutive frames before click transforms to drag
+    DRAG_HOLD_FRAMES = 5          # Consecutive frames before click transforms to drag
     CONFIRMATION_FRAMES = 2       # Consecutive frames needed to confirm click initiation
 
     def __init__(self):
-        self.left_state = "IDLE"          # IDLE -> POSSIBLE_CLICK -> CLICK_DOWN -> CLICK_UP -> COOLDOWN
-        self.right_state = "IDLE"         # IDLE -> POSSIBLE_RIGHT -> RIGHT_DOWN -> RIGHT_UP -> COOLDOWN
+        self.pinch_state = "IDLE"         # IDLE, PINCH_CANDIDATE, PINCH_CONFIRMED, CLICKED, PINCH_HELD, RELEASE_CANDIDATE
+        self.right_state = "IDLE"         # IDLE, POSSIBLE_RIGHT, RIGHT_DOWN, COOLDOWN
         self.is_dragging = False
         self.is_paused = False
+        self.is_pinch_anchored = False    # True when cursor should be anchored to prevent drift
 
         self._pinch_frame_count = 0
         self._two_finger_frame_count = 0
@@ -340,8 +345,14 @@ class GestureStateMachine:
         self._last_right_click_time = 0.0
         self._drag_grace_frames = 0
 
+        # Scale and ratio tracking
+        self.current_pinch_ratio = 1.0
+        self.current_palm_scale = 0.1
+        self.current_hand_ref = (0.5, 0.5)
+
         # Debounce settings
         self.click_debounce = 0.25        # Seconds cooldown after click release
+        self.pinch_sensitivity = 1.0
         self.confidence_score = 1.0
 
     @staticmethod
@@ -359,7 +370,7 @@ class GestureStateMachine:
           1. Open Palm (Pause)
           2. Drag Active
           3. Right Click
-          4. Left Click
+          4. Left Click / Pinch
           5. Point (Move)
         """
         if not landmarks or len(landmarks) < 21:
@@ -369,6 +380,7 @@ class GestureStateMachine:
         wrist = landmarks[0]
         thumb_tip = landmarks[4]
         index_mcp = landmarks[5]
+        index_pip = landmarks[6]
         index_tip = landmarks[8]
         middle_mcp = landmarks[9]
         middle_tip = landmarks[12]
@@ -377,10 +389,14 @@ class GestureStateMachine:
         pinky_mcp = landmarks[17]
         pinky_tip = landmarks[20]
 
-        # Hand palm reference scale (distance across palm base: index_mcp to pinky_mcp)
+        # Palm scale reference (distance across palm base: index_mcp to pinky_mcp)
         palm_scale = self.dist(index_mcp, pinky_mcp)
         if palm_scale < 0.02:
             palm_scale = 0.1  # Fallback against division by zero
+        self.current_palm_scale = palm_scale
+
+        # Hand translation reference point: index_mcp (landmark 5) is biomechanically stable
+        self.current_hand_ref = (index_mcp.x, index_mcp.y)
 
         # Finger extensions relative to wrist
         def is_ext(tip, mcp):
@@ -395,6 +411,12 @@ class GestureStateMachine:
         # Pinch metrics
         thumb_index_dist = self.dist(thumb_tip, index_tip)
         pinch_ratio = thumb_index_dist / palm_scale
+        self.current_pinch_ratio = pinch_ratio
+
+        # Adaptive start threshold adjusted by sensitivity
+        start_ratio = self.PINCH_START_RATIO * self.pinch_sensitivity
+        pre_anchor_ratio = self.PINCH_PRE_ANCHOR_RATIO * self.pinch_sensitivity
+        release_ratio = self.PINCH_RELEASE_RATIO * self.pinch_sensitivity
 
         ext_count = sum([index_ext, middle_ext, ring_ext, pinky_ext])
 
@@ -406,7 +428,10 @@ class GestureStateMachine:
                 WindowsMouseInjector.mouse_up("left")
                 self.is_dragging = False
             self.is_paused = True
-            return "PAUSED", {"pinch_ratio": pinch_ratio}
+            self.is_pinch_anchored = False
+            self.pinch_state = "IDLE"
+            self._pinch_frame_count = 0
+            return "PAUSED", {"pinch_ratio": pinch_ratio, "palm_scale": palm_scale}
 
         self.is_paused = False
 
@@ -414,26 +439,27 @@ class GestureStateMachine:
         # 2. PRIORITY 2: ACTIVE DRAG CONTINUATION & GRACE
         # -------------------------------------------------------------
         if self.is_dragging:
-            # Maintain drag as long as pinch is held or within brief grace period
-            if pinch_ratio < self.PINCH_RELEASE_RATIO:
-                self._drag_grace_frames = 3
-                return "DRAG", {"pinch_ratio": pinch_ratio}
+            self.is_pinch_anchored = False  # Allow drag to translate cursor
+            if pinch_ratio < release_ratio:
+                self._drag_grace_frames = 4
+                return "DRAG", {"pinch_ratio": pinch_ratio, "palm_scale": palm_scale}
             elif self._drag_grace_frames > 0:
                 self._drag_grace_frames -= 1
-                return "DRAG", {"pinch_ratio": pinch_ratio}
+                return "DRAG", {"pinch_ratio": pinch_ratio, "palm_scale": palm_scale}
             else:
                 # Drag released
                 WindowsMouseInjector.mouse_up("left")
                 self.is_dragging = False
-                self.left_state = "COOLDOWN"
+                self.pinch_state = "IDLE"
                 self._last_left_click_time = now
-                return "POINT", {"pinch_ratio": pinch_ratio}
+                self._pinch_frame_count = 0
+                return "POINT", {"pinch_ratio": pinch_ratio, "palm_scale": palm_scale}
 
         # -------------------------------------------------------------
         # 3. PRIORITY 3: RIGHT CLICK (Two fingers extended, thumb away)
         # -------------------------------------------------------------
         two_fingers = index_ext and middle_ext and not ring_ext and not pinky_ext
-        if two_fingers and pinch_ratio >= self.PINCH_RELEASE_RATIO:
+        if two_fingers and pinch_ratio >= release_ratio:
             self._two_finger_frame_count += 1
             if self._two_finger_frame_count >= self.CONFIRMATION_FRAMES:
                 if self.right_state == "IDLE" and (now - self._last_right_click_time > self.click_debounce):
@@ -449,52 +475,89 @@ class GestureStateMachine:
                 self.right_state = "IDLE"
 
         # -------------------------------------------------------------
-        # 4. PRIORITY 4: LEFT CLICK & DRAG (Index + Thumb Pinch)
+        # 4. PRIORITY 4: PINCH ANCHORING & LEFT CLICK (Thumb + Index)
         # -------------------------------------------------------------
-        if pinch_ratio < self.PINCH_START_RATIO:
+        # Pre-anchor check: If fingers are converging toward pinch, anchor the cursor immediately
+        # to freeze the cursor at the target position and kill downward thumb-pinch drift!
+        if pinch_ratio < pre_anchor_ratio:
+            self.is_pinch_anchored = True
+        else:
+            if not (self.pinch_state in ["PINCH_CONFIRMED", "CLICKED", "PINCH_HELD"]):
+                self.is_pinch_anchored = False
+
+        if pinch_ratio < start_ratio:
             self._pinch_frame_count += 1
-            # Check cooldown
-            if self.left_state == "IDLE" and (now - self._last_left_click_time > self.click_debounce):
+
+            if self.pinch_state == "IDLE":
+                if (now - self._last_left_click_time > self.click_debounce):
+                    self.pinch_state = "PINCH_CANDIDATE"
+                    self.is_pinch_anchored = True
+                    return "PINCH_CANDIDATE", {"pinch_ratio": pinch_ratio}
+
+            elif self.pinch_state == "PINCH_CANDIDATE":
+                self.is_pinch_anchored = True
                 if self._pinch_frame_count >= self.CONFIRMATION_FRAMES:
-                    # Trigger Left Down
+                    # Confirmed! Inject mouse down
                     WindowsMouseInjector.mouse_down("left")
-                    self.left_state = "CLICK_DOWN"
+                    self.pinch_state = "PINCH_CONFIRMED"
                     return "CLICK", {"pinch_ratio": pinch_ratio}
-            elif self.left_state == "CLICK_DOWN":
+                return "PINCH_CANDIDATE", {"pinch_ratio": pinch_ratio}
+
+            elif self.pinch_state in ["PINCH_CONFIRMED", "CLICKED"]:
                 if self._pinch_frame_count >= (self.CONFIRMATION_FRAMES + self.DRAG_HOLD_FRAMES):
-                    # Promoted to Drag!
+                    # Promoted to Drag
                     self.is_dragging = True
-                    self.left_state = "IDLE"
-                    self._drag_grace_frames = 3
+                    self.pinch_state = "PINCH_HELD"
+                    self.is_pinch_anchored = False
+                    self._drag_grace_frames = 4
                     return "DRAG", {"pinch_ratio": pinch_ratio}
                 return "CLICK", {"pinch_ratio": pinch_ratio}
+
+            elif self.pinch_state == "PINCH_HELD":
+                return "DRAG", {"pinch_ratio": pinch_ratio}
+
         else:
-            # Pinch opened / released
-            if self.left_state == "CLICK_DOWN":
+            # Pinch opened / releasing
+            if self.pinch_state in ["PINCH_CONFIRMED", "CLICKED"]:
                 WindowsMouseInjector.mouse_up("left")
-                self.left_state = "COOLDOWN"
+                self.pinch_state = "IDLE"
+                self.is_pinch_anchored = False
                 self._last_left_click_time = now
                 self._pinch_frame_count = 0
-                return "POINT", {"action": "click_up"}
-            elif self.left_state == "COOLDOWN":
-                if now - self._last_left_click_time > self.click_debounce:
-                    self.left_state = "IDLE"
+                return "POINT", {"action": "click_up", "pinch_ratio": pinch_ratio}
+            elif self.pinch_state == "PINCH_CANDIDATE":
+                # Aborted pinch candidate before confirmation
+                self.pinch_state = "IDLE"
+                self.is_pinch_anchored = False
+                self._pinch_frame_count = 0
+            elif self.pinch_state == "PINCH_HELD":
+                WindowsMouseInjector.mouse_up("left")
+                self.pinch_state = "IDLE"
+                self.is_dragging = False
+                self.is_pinch_anchored = False
+                self._last_left_click_time = now
+                self._pinch_frame_count = 0
+                return "POINT", {"action": "drag_up", "pinch_ratio": pinch_ratio}
+
             self._pinch_frame_count = 0
 
         # -------------------------------------------------------------
         # 5. PRIORITY 5: CURSOR POINTING
         # -------------------------------------------------------------
         if index_ext or ext_count <= 2:
-            return "POINT", {"pinch_ratio": pinch_ratio}
+            return "POINT", {"pinch_ratio": pinch_ratio, "palm_scale": palm_scale}
 
-        return "NEUTRAL", {"pinch_ratio": pinch_ratio}
+        return "NEUTRAL", {"pinch_ratio": pinch_ratio, "palm_scale": palm_scale}
 
     def reset(self):
         """Safely resets state and releases any held buttons."""
         if self.is_dragging:
             WindowsMouseInjector.mouse_up("left")
+        if self.pinch_state in ["PINCH_CONFIRMED", "CLICKED"]:
+            WindowsMouseInjector.mouse_up("left")
         self.is_dragging = False
-        self.left_state = "IDLE"
+        self.is_pinch_anchored = False
+        self.pinch_state = "IDLE"
         self.right_state = "IDLE"
         self._pinch_frame_count = 0
         self._two_finger_frame_count = 0
@@ -520,6 +583,9 @@ class CameraMouseController:
         self.target_fps = int(settings.get("camera_mouse_tracking_fps", 30))
         self.sensitivity = float(settings.get("camera_mouse_sensitivity", 1.8))
         self.deadzone = float(settings.get("camera_mouse_deadzone", 0.003))
+        self.deadzone_mode = str(settings.get("camera_mouse_deadzone_mode", "Adaptive"))
+        self.deadzone_px = float(settings.get("camera_mouse_deadzone_px", 3.5))
+        self.pinch_sensitivity = float(settings.get("camera_mouse_pinch_sensitivity", 1.0))
         self.prediction_factor = float(settings.get("camera_mouse_prediction", 0.015))
         self.one_euro_min_cutoff = float(settings.get("camera_mouse_one_euro_min_cutoff", 1.2))
         self.one_euro_beta = float(settings.get("camera_mouse_one_euro_beta", 0.02))
@@ -539,13 +605,22 @@ class CameraMouseController:
         self._vel_x: float = 0.0
         self._vel_y: float = 0.0
 
-        # Filtered cursor positions
+        # Sub-pixel accumulator and screen-space dispatch tracking
+        self._dispatched_x: Optional[float] = None
+        self._dispatched_y: Optional[float] = None
         self._curr_cursor_x: Optional[float] = None
         self._curr_cursor_y: Optional[float] = None
+
+        # Pinch Cursor Anchoring states
+        self._anchor_screen_x: Optional[float] = None
+        self._anchor_screen_y: Optional[float] = None
+        self._anchor_hand_ref: Optional[Tuple[float, float]] = None
+        self._was_pinch_anchored: bool = False
 
         # State machines & synchronization
         self.gesture_machine = GestureStateMachine()
         self.gesture_machine.click_debounce = self.click_debounce
+        self.gesture_machine.pinch_sensitivity = self.pinch_sensitivity
 
         # Latest-frame-wins capture buffers
         self._latest_raw_frame: Optional[np.ndarray] = None
@@ -559,9 +634,17 @@ class CameraMouseController:
         self.cursor_update_rate = 0.0
         self.estimated_latency_ms = 0.0
         self.measured_jitter_px = 0.0
+        self.current_deadzone_radius_px = self.deadzone_px
+        self.is_anchored_active = False
         self.landmark_confidence = 0.0
         self.dropped_frames_count = 0
         self.last_gesture = "NONE"
+
+        # Calibration state
+        self._calibration_samples: List[Tuple[float, float]] = []
+        self._is_calibrating: bool = False
+        self._calibration_end_time: float = 0.0
+        self._calibration_result_text: str = ""
 
         # Stationary jitter measurement window
         self._jitter_window: List[Tuple[float, float]] = []
@@ -846,41 +929,44 @@ class CameraMouseController:
                 except Exception:
                     pass
 
+    def start_noise_calibration(self, duration_sec: float = 1.0):
+        """Starts 1.0 second live landmark noise calibration to determine optimal dead-zone size."""
+        self._calibration_samples.clear()
+        self._is_calibrating = True
+        self._calibration_end_time = time.time() + duration_sec
+        self._calibration_result_text = "Calibrating noise (hold hand still)..."
+
     def _process_cursor_movement(self, landmarks, vx: int, vy: int, vw: int, vh: int, now: float):
         """
-        Direct 1:1 Index Fingertip cursor mapping with One Euro Filtering,
-        velocity prediction, and adaptive micro-jitter deadband.
+        Direct 1:1 Index Fingertip cursor mapping with Pinch Cursor Anchoring,
+        Adaptive Screen-Space Dead-Zone with Sub-Pixel Accumulator, and One Euro Filtering.
         """
         index_tip = landmarks[8]
+        index_mcp = landmarks[5]
+        wrist = landmarks[0]
         raw_x = index_tip.x
         raw_y = index_tip.y
 
-        # Velocity estimation
+        # Biomechanically stable hand reference point (index MCP / wrist center)
+        hand_ref_x = 0.7 * index_mcp.x + 0.3 * wrist.x
+        hand_ref_y = 0.7 * index_mcp.y + 0.3 * wrist.y
+
+        # Velocity estimation of index tip
         if self._last_raw_x is not None and self._last_raw_time > 0:
             dt = max(now - self._last_raw_time, 1e-4)
             inst_vx = (raw_x - self._last_raw_x) / dt
             inst_vy = (raw_y - self._last_raw_y) / dt
-            # Low pass filtered velocity
             self._vel_x = 0.6 * inst_vx + 0.4 * self._vel_x
             self._vel_y = 0.6 * inst_vy + 0.4 * self._vel_y
         else:
             self._vel_x = 0.0
             self._vel_y = 0.0
 
-        # Micro-jitter deadband (only when velocity is near zero)
-        speed_sq = self._vel_x ** 2 + self._vel_y ** 2
-        if speed_sq < 0.0004 and self._last_raw_x is not None:
-            disp_sq = (raw_x - self._last_raw_x) ** 2 + (raw_y - self._last_raw_y) ** 2
-            if disp_sq < (self.deadzone ** 2):
-                # Suppress micro-vibration while stationary
-                return
-
         self._last_raw_x = raw_x
         self._last_raw_y = raw_y
         self._last_raw_time = now
 
         # Active boundary normalization (centered 65% area maps to 100% desktop)
-        # Avoids extreme reach while maintaining high precision
         margin_x = 0.175
         margin_y = 0.175
         norm_x = (raw_x - margin_x) / (1.0 - 2.0 * margin_x)
@@ -889,7 +975,6 @@ class CameraMouseController:
         # Apply Sensitivity
         norm_x = (norm_x - 0.5) * self.sensitivity + 0.5
         norm_y = (norm_y - 0.5) * self.sensitivity + 0.5
-
         norm_x = max(0.0, min(1.0, norm_x))
         norm_y = max(0.0, min(1.0, norm_y))
 
@@ -897,20 +982,119 @@ class CameraMouseController:
         target_x = vx + norm_x * vw
         target_y = vy + norm_y * vh
 
-        # Velocity-aware conservative prediction (compensates for display/hardware lag)
-        if speed_sq > 0.002:
-            pred_x = target_x + (self._vel_x * vw) * self.prediction_factor
-            pred_y = target_y + (self._vel_y * vh) * self.prediction_factor
+        # -------------------------------------------------------------
+        # 1. PINCH CURSOR ANCHORING & REFERENCE SEPARATION
+        # -------------------------------------------------------------
+        is_pinch_anchored = getattr(self.gesture_machine, "is_pinch_anchored", False)
+        self.is_anchored_active = is_pinch_anchored
+
+        if is_pinch_anchored:
+            # Entering or maintaining pinch candidate / confirm
+            if not self._was_pinch_anchored or self._anchor_screen_x is None:
+                # Lock anchor at current filtered/dispatched screen coordinate
+                if self._curr_cursor_x is not None and self._curr_cursor_y is not None:
+                    self._anchor_screen_x = self._curr_cursor_x
+                    self._anchor_screen_y = self._curr_cursor_y
+                else:
+                    self._anchor_screen_x = target_x
+                    self._anchor_screen_y = target_y
+                self._anchor_hand_ref = (hand_ref_x, hand_ref_y)
+                self._was_pinch_anchored = True
+
+            # Calculate whole-hand translation relative to anchor reference
+            dx_hand = (hand_ref_x - self._anchor_hand_ref[0]) * vw * self.sensitivity
+            dy_hand = (hand_ref_y - self._anchor_hand_ref[1]) * vh * self.sensitivity
+            hand_disp = math.sqrt(dx_hand ** 2 + dy_hand ** 2)
+
+            # Intentional hand translation threshold (pixels)
+            # If the user intentionally moves their entire hand, translate the cursor;
+            # if only finger pinch convergence occurs, freeze cursor solidly at anchor.
+            hand_move_threshold = 12.0
+            if hand_disp > hand_move_threshold:
+                excess = hand_disp - hand_move_threshold
+                scale = excess / hand_disp
+                pred_x = self._anchor_screen_x + dx_hand * scale
+                pred_y = self._anchor_screen_y + dy_hand * scale
+            else:
+                pred_x = self._anchor_screen_x
+                pred_y = self._anchor_screen_y
+
         else:
-            pred_x = target_x
-            pred_y = target_y
+            if self._was_pinch_anchored:
+                # Exiting pinch: Seamless transfer to prevent cursor teleport/jump!
+                # Re-seed the One Euro filter states to the current anchor position
+                if self._anchor_screen_x is not None and self._anchor_screen_y is not None:
+                    self._filter_x.x_filt.s = self._anchor_screen_x
+                    self._filter_y.x_filt.s = self._anchor_screen_y
+                self._was_pinch_anchored = False
+                self._anchor_screen_x = None
+                self._anchor_screen_y = None
+                self._anchor_hand_ref = None
+
+            # Normal pointing mode: Velocity-aware conservative prediction
+            speed_sq = self._vel_x ** 2 + self._vel_y ** 2
+            if speed_sq > 0.002:
+                pred_x = target_x + (self._vel_x * vw) * self.prediction_factor
+                pred_y = target_y + (self._vel_y * vh) * self.prediction_factor
+            else:
+                pred_x = target_x
+                pred_y = target_y
 
         # One Euro Filter
         filt_x = self._filter_x.filter(pred_x, timestamp=now)
         filt_y = self._filter_y.filter(pred_y, timestamp=now)
+        self._curr_cursor_x = filt_x
+        self._curr_cursor_y = filt_y
+
+        # -------------------------------------------------------------
+        # 2. ADAPTIVE SCREEN-SPACE DEAD-ZONE WITH SUB-PIXEL ACCUMULATOR
+        # -------------------------------------------------------------
+        if self._dispatched_x is None or self._dispatched_y is None:
+            self._dispatched_x = filt_x
+            self._dispatched_y = filt_y
+            WindowsMouseInjector.move_to(int(filt_x), int(filt_y))
+            return
+
+        disp_x = filt_x - self._dispatched_x
+        disp_y = filt_y - self._dispatched_y
+        disp_dist = math.sqrt(disp_x ** 2 + disp_y ** 2)
+
+        # Estimate cursor velocity in pixels / second
+        dt_cursor = max(now - getattr(self, "_last_disp_time", now - 0.033), 1e-4)
+        cursor_velocity_px = disp_dist / dt_cursor
+        self._last_disp_time = now
+
+        # Dynamic deadzone radius: Full base radius when stationary, shrinks smoothly to near 0 upon movement
+        base_dz = self.deadzone_px
+        if self.deadzone_mode == "Adaptive":
+            # Shrinks smoothly as velocity increases to eliminate sticky feeling
+            vel_factor = max(0.0, min(1.0, cursor_velocity_px / 90.0))
+            active_deadzone = base_dz * (1.0 - vel_factor)
+        elif self.deadzone_mode == "Disabled":
+            active_deadzone = 0.0
+        else:
+            active_deadzone = base_dz
+
+        self.current_deadzone_radius_px = round(active_deadzone, 2)
+
+        # Handle noise calibration sampling
+        if self._is_calibrating:
+            self._calibration_samples.append((filt_x, filt_y))
+            if now >= self._calibration_end_time:
+                self._is_calibrating = False
+                if len(self._calibration_samples) >= 10:
+                    xs = [p[0] for p in self._calibration_samples]
+                    ys = [p[1] for p in self._calibration_samples]
+                    noise_rms = math.sqrt(float(np.std(xs)) ** 2 + float(np.std(ys)) ** 2)
+                    cal_dz = max(1.8, min(7.5, round(noise_rms * 2.5, 1)))
+                    self.deadzone_px = cal_dz
+                    VedaConfig.update_setting("camera_mouse_deadzone_px", cal_dz)
+                    self._calibration_result_text = f"Calibrated deadzone: {cal_dz}px (noise: {noise_rms:.2f}px)"
+                else:
+                    self._calibration_result_text = "Calibration failed: insufficient samples."
 
         # Jitter measurement metric on stationary finger
-        if speed_sq < 0.0006:
+        if cursor_velocity_px < 25.0:
             self._jitter_window.append((filt_x, filt_y))
             if len(self._jitter_window) > 15:
                 self._jitter_window.pop(0)
@@ -923,14 +1107,14 @@ class CameraMouseController:
         else:
             self._jitter_window.clear()
 
-        self._curr_cursor_x = filt_x
-        self._curr_cursor_y = filt_y
-
-        # Native SendInput Injection
-        WindowsMouseInjector.move_to(int(filt_x), int(filt_y))
+        # If displacement from last dispatched position exceeds dynamic dead-zone, dispatch to Windows
+        if disp_dist >= active_deadzone:
+            self._dispatched_x = filt_x
+            self._dispatched_y = filt_y
+            WindowsMouseInjector.move_to(int(filt_x), int(filt_y))
 
     def _render_skeleton_overlay(self, frame: np.ndarray, landmarks, gesture: str) -> np.ndarray:
-        """Renders hand skeleton, fingertip cursors, and real-time performance HUD directly in RAM."""
+        """Renders hand skeleton, fingertip cursors, pinch anchor, and real-time performance HUD directly in RAM."""
         out = frame.copy()
         h, w, _ = out.shape
 
@@ -958,17 +1142,27 @@ class CameraMouseController:
             # Middle Tip (12) - Purple
             cv2.circle(out, pts[12], 6, (226, 43, 138), -1)
 
-            # If pinch active, draw connection line
-            if gesture in ["CLICK", "DRAG"]:
-                cv2.line(out, pts[4], pts[8], (0, 255, 0), 2)
+            # Draw Pinch Connection & Anchor status
+            p_ratio = getattr(self.gesture_machine, "current_pinch_ratio", 1.0)
+            is_anchored = getattr(self.gesture_machine, "is_pinch_anchored", False)
 
-            cv2.putText(out, "HAND DETECTED", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (16, 185, 129), 2)
+            if is_anchored or gesture in ["CLICK", "DRAG", "PINCH_CANDIDATE"]:
+                cv2.line(out, pts[4], pts[8], (0, 255, 0), 2)
+                # Draw cursor anchor indicator on Index Tip
+                cv2.circle(out, pts[8], 16, (0, 255, 127), 2)
+                cv2.putText(out, "ANCHORED", (pts[8][0] + 18, pts[8][1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 127), 1)
+
+            # Hand scale indicator line between Index MCP and Pinky MCP
+            cv2.line(out, pts[5], pts[17], (148, 163, 184), 1)
+
+            cv2.putText(out, f"HAND DETECTED | SCALE: {int(self.gesture_machine.current_palm_scale * 100)}%", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (16, 185, 129), 1)
         else:
             cv2.putText(out, "NO HAND", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 116, 139), 2)
 
         # Performance HUD overlay
         gesture_colors = {
             "POINT": (255, 191, 0),
+            "PINCH_CANDIDATE": (0, 215, 255),
             "CLICK": (0, 255, 127),
             "RIGHT_CLICK": (255, 105, 180),
             "DRAG": (0, 140, 255),
@@ -977,11 +1171,12 @@ class CameraMouseController:
             "NEUTRAL": (148, 163, 184)
         }
         badge_col = gesture_colors.get(gesture, (255, 255, 255))
-        cv2.putText(out, f"GESTURE: {gesture}", (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, badge_col, 2)
+        p_ratio = getattr(self.gesture_machine, "current_pinch_ratio", 1.0)
+        cv2.putText(out, f"GESTURE: {gesture} (Pinch: {p_ratio:.2f})", (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.42, badge_col, 2)
 
         # Telemetry metrics top-right
-        hud_text = f"FPS: {self.tracking_fps} | {self.estimated_latency_ms}ms"
-        cv2.putText(out, hud_text, (w - 140, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (203, 213, 225), 1)
+        hud_text = f"FPS: {self.tracking_fps} | {self.estimated_latency_ms}ms | DZ: {self.current_deadzone_radius_px}px"
+        cv2.putText(out, hud_text, (w - 210, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (203, 213, 225), 1)
 
         return out
 
@@ -996,12 +1191,20 @@ class CameraMouseController:
             "cursor_update_rate": self.cursor_update_rate,
             "estimated_latency_ms": self.estimated_latency_ms,
             "measured_jitter_px": self.measured_jitter_px,
+            "deadzone_radius_px": self.current_deadzone_radius_px,
+            "deadzone_px": self.deadzone_px,
+            "deadzone_mode": self.deadzone_mode,
+            "pinch_ratio": round(getattr(self.gesture_machine, "current_pinch_ratio", 1.0), 3),
+            "is_anchored": self.is_anchored_active,
+            "pinch_sensitivity": self.pinch_sensitivity,
             "landmark_confidence": self.landmark_confidence,
             "resolution": f"{self.negotiated_resolution[0]}x{self.negotiated_resolution[1]}",
             "sensitivity": self.sensitivity,
             "prediction": self.prediction_factor,
             "deadzone": self.deadzone,
             "is_dragging": self.gesture_machine.is_dragging,
+            "calibration_status": self._calibration_result_text,
+            "is_calibrating": self._is_calibrating,
             "model_path": resolve_model_path(),
             "model_exists": os.path.isfile(resolve_model_path()),
         }
@@ -1012,11 +1215,11 @@ class CameraMouseController:
     def run_benchmark_suite(self) -> Dict[str, Any]:
         """
         Executes automated precision and latency benchmark on mock & synthetic motions
-        to quantitatively verify filters, latency, and click state machine transitions.
+        to quantitatively verify filters, latency, pinch anchoring stability, and click transitions.
         """
         results = {}
 
-        # Test 1: One Euro filter step response & latency test
+        # Test 1: One Euro filter step response & settle latency test
         f = OneEuroFilter(self.one_euro_min_cutoff, self.one_euro_beta)
         latencies = []
         outputs = []
@@ -1040,24 +1243,78 @@ class CameraMouseController:
         results["filtered_jitter_rms"] = round(filt_std, 3)
         results["jitter_reduction_percent"] = round((1.0 - (filt_std / raw_std)) * 100.0, 1)
 
-        # Test 3: Gesture State Machine Click Latency & Hysteresis
-        sm = GestureStateMachine()
-        sm.click_debounce = 0.15
+        # Test 3: Pinch Cursor Displacement Benchmark (Anchor Stability)
+        # Verify that finger convergence during pinch yields near-zero cursor drift (< 2.0 px)
+        anchor_test_controller = CameraMouseController()
+        anchor_test_controller.deadzone_px = 3.5
 
         class MockLandmark:
             def __init__(self, x, y):
                 self.x = x
                 self.y = y
 
+        vx, vy, vw, vh = 0, 0, 1920, 1080
+        mock_hand = [MockLandmark(0.5, 0.5) for _ in range(21)]
+        mock_hand[0] = MockLandmark(0.5, 0.8)   # Wrist
+        mock_hand[5] = MockLandmark(0.45, 0.5)  # Index MCP
+        mock_hand[17] = MockLandmark(0.55, 0.5) # Pinky MCP
+        mock_hand[8] = MockLandmark(0.50, 0.4)  # Index Tip
+        mock_hand[4] = MockLandmark(0.42, 0.4)  # Thumb Tip
+
+        # Initialize tracking on stationary finger
+        for i in range(10):
+            t = i * 0.033
+            anchor_test_controller.gesture_machine.update(mock_hand, t)
+            anchor_test_controller._process_cursor_movement(mock_hand, vx, vy, vw, vh, t)
+
+        pre_pinch_x = anchor_test_controller._curr_cursor_x
+        pre_pinch_y = anchor_test_controller._curr_cursor_y
+
+        # Simulate realistic pinch-click cycle: pre-anchor -> closure -> click -> release
+        # The user's index tip involuntarily drifts slightly downward/sideways as thumb converges
+        pinch_displacements = []
+        for step in range(6):
+            t = 0.33 + step * 0.033
+            # Index tip drifts involuntarily as thumb pinches into it
+            mock_hand[8] = MockLandmark(0.50 - step * 0.002, 0.40 + step * 0.003)
+            # Thumb moves in to pinch
+            mock_hand[4] = MockLandmark(0.44 + step * 0.010, 0.40 + step * 0.003)
+
+            anchor_test_controller.gesture_machine.update(mock_hand, t)
+            anchor_test_controller._process_cursor_movement(mock_hand, vx, vy, vw, vh, t)
+
+            cur_x = anchor_test_controller._curr_cursor_x
+            cur_y = anchor_test_controller._curr_cursor_y
+            disp = math.sqrt((cur_x - pre_pinch_x) ** 2 + (cur_y - pre_pinch_y) ** 2)
+            pinch_displacements.append(disp)
+
+        # Release pinch
+        for step in range(4):
+            t = 0.53 + step * 0.033
+            mock_hand[4] = MockLandmark(0.42, 0.40)
+            mock_hand[8] = MockLandmark(0.50, 0.40)
+            anchor_test_controller.gesture_machine.update(mock_hand, t)
+            anchor_test_controller._process_cursor_movement(mock_hand, vx, vy, vw, vh, t)
+
+            cur_x = anchor_test_controller._curr_cursor_x
+            cur_y = anchor_test_controller._curr_cursor_y
+            disp = math.sqrt((cur_x - pre_pinch_x) ** 2 + (cur_y - pre_pinch_y) ** 2)
+            pinch_displacements.append(disp)
+
+        max_pinch_disp = max(pinch_displacements[:6]) if pinch_displacements else 0.0
+        results["pinch_cursor_max_displacement_px"] = round(float(max_pinch_disp), 2)
+        results["pinch_anchoring_passed"] = max_pinch_disp < 2.0
+
+        # Test 4: Gesture State Machine Click Latency & Hysteresis
+        sm = GestureStateMachine()
+        sm.click_debounce = 0.15
+
         mock_palm = [MockLandmark(0.5, 0.5) for _ in range(21)]
-        # Index MCP (5) at 0.45, Pinky MCP (17) at 0.55 -> Palm scale = 0.10
         mock_palm[5] = MockLandmark(0.45, 0.5)
         mock_palm[17] = MockLandmark(0.55, 0.5)
-        # Wrist at 0.5, 0.9
         mock_palm[0] = MockLandmark(0.5, 0.9)
 
         click_times = []
-        # Simulate pinch closure across 20 cycles
         detected_clicks = 0
         for cycle in range(20):
             t_base = cycle * 0.4

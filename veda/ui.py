@@ -1281,14 +1281,22 @@ class VedaApp(ctk.CTk):
             jit = diag.get("measured_jitter_px", 0.0)
             rate = diag.get("cursor_update_rate", 0.0)
             res = diag.get("resolution", "640x480")
+            dz = diag.get("deadzone_radius_px", 3.5)
+            pr = diag.get("pinch_ratio", 1.0)
+            anchored = "LOCKED" if diag.get("is_anchored", False) else "FREE"
+            cal_msg = diag.get("calibration_status", "")
 
             m_text = (
                 f"• Tracking FPS:        {fps} FPS ({res})\n"
                 f"• Cursor Update Rate:  {rate} Hz\n"
                 f"• Estimated Latency:   {lat} ms (Frame Capture to SendInput)\n"
                 f"• Measured Jitter:     {jit} px RMS (Stationary finger)\n"
+                f"• Adaptive Deadzone:   {dz} px (Mode: {diag.get('deadzone_mode', 'Adaptive')})\n"
+                f"• Pinch Ratio / Anchor: {pr:.2f} | Cursor Anchor: {anchored}\n"
                 f"• Landmark Confidence: {int(diag.get('landmark_confidence', 0)*100)}%"
             )
+            if cal_msg:
+                m_text += f"\n• Noise Calibration:   {cal_msg}"
             lbl_telem_metrics.configure(text=m_text)
             modal.after(100, _update_calibration_tick)
 
@@ -1296,14 +1304,19 @@ class VedaApp(ctk.CTk):
 
         btn_row = ctk.CTkFrame(box, fg_color="transparent")
         btn_row.pack(fill="x", padx=12, pady=(0, 6))
+
+        def _trigger_cal_noise():
+            camera_mouse_controller.start_noise_calibration(1.0)
+
+        ctk.CTkButton(btn_row, text="🎯 Auto-Calibrate Noise", width=140, height=26, font=ctk.CTkFont(family="Consolas", size=10, weight="bold"), fg_color="#059669", hover_color="#047857", text_color="#ffffff", command=_trigger_cal_noise).pack(side="left")
         ctk.CTkButton(btn_row, text="Close", width=70, height=26, font=ctk.CTkFont(family="Consolas", size=10), fg_color="#1e293b", hover_color="#334155", command=modal.destroy).pack(side="right")
 
     def open_camera_mouse_benchmark_modal(self):
         """Runs the automated precision & latency benchmark suite and displays actual measurements."""
         modal = ctk.CTkToplevel(self)
         modal.title("V.E.D.A. — Camera Mouse Performance Test")
-        modal.geometry("480x420")
-        modal.minsize(440, 380)
+        modal.geometry("490x460")
+        modal.minsize(450, 400)
         modal.attributes("-topmost", True)
         modal.configure(fg_color="#07090e")
 
@@ -1311,7 +1324,7 @@ class VedaApp(ctk.CTk):
         box.pack(fill="both", expand=True, padx=10, pady=10)
 
         ctk.CTkLabel(box, text="⚡ CAMERA MOUSE PERFORMANCE BENCHMARK", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"), text_color="#38bdf8").pack(anchor="w", padx=12, pady=(10, 4))
-        ctk.CTkLabel(box, text="Quantitative test suite measuring 1€ filter latency, stationary jitter, and click success.", font=ctk.CTkFont(family="Consolas", size=10), text_color="#94a3b8").pack(anchor="w", padx=12, pady=(0, 8))
+        ctk.CTkLabel(box, text="Quantitative test suite measuring 1€ filter latency, stationary jitter, pinch anchor, and click success.", font=ctk.CTkFont(family="Consolas", size=10), text_color="#94a3b8").pack(anchor="w", padx=12, pady=(0, 8))
 
         res_card = ctk.CTkFrame(box, fg_color="#05080e", corner_radius=6, border_width=1, border_color="#161f30")
         res_card.pack(fill="both", expand=True, padx=12, pady=(0, 8))
@@ -1329,7 +1342,10 @@ class VedaApp(ctk.CTk):
                 f"   • Raw Synthetic Jitter:    {suite_res.get('raw_jitter_rms', 0)} px\n"
                 f"   • Filtered Output Jitter:  {suite_res.get('filtered_jitter_rms', 0)} px\n"
                 f"   • Jitter Suppression:     {suite_res.get('jitter_reduction_percent', 0)}%\n\n"
-                f" TEST 3: GESTURE STATE MACHINE (PINCH CLICK)\n"
+                f" TEST 3: PINCH CURSOR ANCHORING (ZERO DRIFT)\n"
+                f"   • Involuntary Drift:       {suite_res.get('pinch_cursor_max_displacement_px', 0)} px\n"
+                f"   • Drift Target (<2.0px):   {'PASSED' if suite_res.get('pinch_anchoring_passed', False) else 'FAILED'}\n\n"
+                f" TEST 4: GESTURE STATE MACHINE (PINCH CLICK)\n"
                 f"   • Clicks Attempted:        {suite_res.get('benchmark_clicks_attempted', 20)}\n"
                 f"   • Clicks Confirmed:        {suite_res.get('benchmark_clicks_detected', 0)}\n"
                 f"   • Click Recognition Rate:  {suite_res.get('click_success_rate', '0%')}\n"
@@ -3744,21 +3760,48 @@ class VedaApp(ctk.CTk):
         lbl_pred_val.pack(side="left")
         sl_pred.configure(command=lambda v: (setattr(camera_mouse_controller, "prediction_factor", round(v, 4)), lbl_pred_val.configure(text=f"{v*1000:.0f}ms"), VedaConfig.update_setting("camera_mouse_prediction", round(v, 4))))
 
-        # Controls Grid Row 2: Jitter Suppression & Click Debounce
+        # Controls Grid Row 2: Adaptive Dead-Zone & Pinch Sensitivity
         slider_row2 = ctk.CTkFrame(card_cam_mouse, fg_color="transparent")
-        slider_row2.pack(fill="x", padx=12, pady=(2, 6))
+        slider_row2.pack(fill="x", padx=12, pady=(2, 4))
 
-        ctk.CTkLabel(slider_row2, text="Jitter Filter:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
-        sl_dead = ctk.CTkSlider(slider_row2, from_=0.001, to=0.010, number_of_steps=18, width=100)
-        sl_dead.set(camera_mouse_controller.deadzone)
+        ctk.CTkLabel(slider_row2, text="Dead-Zone:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
+        sl_dead = ctk.CTkSlider(slider_row2, from_=1.0, to=8.0, number_of_steps=28, width=100)
+        sl_dead.set(camera_mouse_controller.deadzone_px)
         sl_dead.pack(side="left", padx=(0, 4))
-        lbl_dead_val = ctk.CTkLabel(slider_row2, text=f"{camera_mouse_controller.deadzone*1000:.1f}", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=30)
+        lbl_dead_val = ctk.CTkLabel(slider_row2, text=f"{camera_mouse_controller.deadzone_px:.1f}px", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=35)
         lbl_dead_val.pack(side="left", padx=(0, 10))
-        sl_dead.configure(command=lambda v: (setattr(camera_mouse_controller, "deadzone", round(v, 4)), lbl_dead_val.configure(text=f"{v*1000:.1f}"), VedaConfig.update_setting("camera_mouse_deadzone", round(v, 4))))
+        sl_dead.configure(command=lambda v: (setattr(camera_mouse_controller, "deadzone_px", round(v, 1)), lbl_dead_val.configure(text=f"{v:.1f}px"), VedaConfig.update_setting("camera_mouse_deadzone_px", round(v, 1))))
 
-        ctk.CTkLabel(slider_row2, text="Click Debounce:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(slider_row2, text="Pinch Sens:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
+        sl_pinch = ctk.CTkSlider(slider_row2, from_=0.7, to=1.4, number_of_steps=14, width=100)
+        sl_pinch.set(camera_mouse_controller.pinch_sensitivity)
+        sl_pinch.pack(side="left", padx=(0, 4))
+        lbl_pinch_val = ctk.CTkLabel(slider_row2, text=f"{camera_mouse_controller.pinch_sensitivity:.2f}x", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=35)
+        lbl_pinch_val.pack(side="left")
+        sl_pinch.configure(command=lambda v: (setattr(camera_mouse_controller, "pinch_sensitivity", round(v, 2)), setattr(camera_mouse_controller.gesture_machine, "pinch_sensitivity", round(v, 2)), lbl_pinch_val.configure(text=f"{v:.2f}x"), VedaConfig.update_setting("camera_mouse_pinch_sensitivity", round(v, 2))))
+
+        # Controls Grid Row 3: Dead-zone Mode & Click Debounce
+        slider_row3 = ctk.CTkFrame(card_cam_mouse, fg_color="transparent")
+        slider_row3.pack(fill="x", padx=12, pady=(2, 6))
+
+        ctk.CTkLabel(slider_row3, text="Dead-Zone Mode:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
+        dz_menu = ctk.CTkOptionMenu(
+            slider_row3,
+            values=["Adaptive", "Static", "Disabled"],
+            width=90,
+            height=22,
+            font=ctk.CTkFont(family="Consolas", size=9),
+            command=lambda choice: (
+                setattr(camera_mouse_controller, "deadzone_mode", choice),
+                VedaConfig.update_setting("camera_mouse_deadzone_mode", choice)
+            )
+        )
+        dz_menu.set(camera_mouse_controller.deadzone_mode)
+        dz_menu.pack(side="left", padx=(0, 10))
+
+        ctk.CTkLabel(slider_row3, text="Click Debounce:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
         debounce_menu = ctk.CTkOptionMenu(
-            slider_row2,
+            slider_row3,
             values=["Low (0.15s)", "Medium (0.25s)", "High (0.40s)"],
             width=110,
             height=22,
