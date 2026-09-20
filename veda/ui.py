@@ -958,28 +958,41 @@ class VedaApp(ctk.CTk):
 
         # Row 2: Real-time Telemetry Status
         cm_telemetry_row = ctk.CTkFrame(cm_panel, fg_color="#05080e", corner_radius=6)
-        cm_telemetry_row.pack(fill="x", padx=8, pady=(2, 4))
+        cm_telemetry_row.pack(fill="x", padx=8, pady=(2, 2))
 
         self.lbl_cm_hand = ctk.CTkLabel(cm_telemetry_row, text="HAND: NOT DETECTED", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#64748b")
-        self.lbl_cm_hand.pack(side="left", padx=6, pady=3)
+        self.lbl_cm_hand.pack(side="left", padx=6, pady=2)
 
         self.lbl_cm_gesture = ctk.CTkLabel(cm_telemetry_row, text="GESTURE: NONE", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8")
-        self.lbl_cm_gesture.pack(side="left", padx=6, pady=3)
+        self.lbl_cm_gesture.pack(side="left", padx=6, pady=2)
 
         self.lbl_cm_tracking = ctk.CTkLabel(cm_telemetry_row, text="TRACKING: OFF", font=ctk.CTkFont(family="Consolas", size=9), text_color="#64748b")
-        self.lbl_cm_tracking.pack(side="left", padx=6, pady=3)
+        self.lbl_cm_tracking.pack(side="left", padx=6, pady=2)
 
         self.lbl_cm_fps = ctk.CTkLabel(cm_telemetry_row, text="FPS: 0", font=ctk.CTkFont(family="Consolas", size=9), text_color="#64748b")
-        self.lbl_cm_fps.pack(side="right", padx=6, pady=3)
+        self.lbl_cm_fps.pack(side="right", padx=6, pady=2)
 
-        # Row 3: CPU Mode & Controls Legend
+        # Row 3: Extended Performance HUD (Measured Latency, Jitter, Rate)
+        cm_hud_row = ctk.CTkFrame(cm_panel, fg_color="#070b12", corner_radius=6)
+        cm_hud_row.pack(fill="x", padx=8, pady=(1, 3))
+
+        self.lbl_cm_latency = ctk.CTkLabel(cm_hud_row, text="LATENCY: -- ms", font=ctk.CTkFont(family="Consolas", size=8), text_color="#94a3b8")
+        self.lbl_cm_latency.pack(side="left", padx=6, pady=1)
+
+        self.lbl_cm_jitter = ctk.CTkLabel(cm_hud_row, text="JITTER: -- px", font=ctk.CTkFont(family="Consolas", size=8), text_color="#94a3b8")
+        self.lbl_cm_jitter.pack(side="left", padx=6, pady=1)
+
+        self.lbl_cm_rate = ctk.CTkLabel(cm_hud_row, text="RATE: -- Hz", font=ctk.CTkFont(family="Consolas", size=8), text_color="#94a3b8")
+        self.lbl_cm_rate.pack(side="right", padx=6, pady=1)
+
+        # Row 4: Controls Legend & Action Buttons
         cm_legend_row = ctk.CTkFrame(cm_panel, fg_color="transparent")
         cm_legend_row.pack(fill="x", padx=8, pady=(0, 4))
 
-        self.lbl_cm_cpu = ctk.CTkLabel(cm_legend_row, text="CPU MODE: LOW PERFORMANCE (2-CORE)", font=ctk.CTkFont(family="Consolas", size=9), text_color="#475569")
-        self.lbl_cm_cpu.pack(side="left")
+        ctk.CTkLabel(cm_legend_row, text="Index=Move • Pinch=Click/Drag • 2-Fingers=Right-Click • Palm=Pause • ESC=Stop", font=ctk.CTkFont(family="Consolas", size=8), text_color="#64748b").pack(side="left", padx=(0, 4))
 
-        ctk.CTkLabel(cm_panel, text="Index=Move • Fist=Click • 2-Fingers=Right-Click • Pinch=Drag • Palm=Pause • ESC=Stop", font=ctk.CTkFont(family="Consolas", size=8), text_color="#64748b").pack(fill="x", padx=6, pady=(0, 4))
+        ctk.CTkButton(cm_legend_row, text="Benchmark", width=62, height=18, font=ctk.CTkFont(family="Consolas", size=8, weight="bold"), fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8", command=self.open_camera_mouse_benchmark_modal).pack(side="right", padx=(2, 0))
+        ctk.CTkButton(cm_legend_row, text="Calibrate", width=58, height=18, font=ctk.CTkFont(family="Consolas", size=8, weight="bold"), fg_color="#1e293b", hover_color="#334155", text_color="#10b981", command=self.open_camera_mouse_calibration_modal).pack(side="right", padx=(2, 0))
 
         self._update_cam_mouse_panel_state()
 
@@ -1144,6 +1157,20 @@ class VedaApp(ctk.CTk):
 
             if hasattr(self, "lbl_cm_fps") and self.lbl_cm_fps.winfo_exists():
                 self.lbl_cm_fps.configure(text=f"FPS: {fps}")
+
+            # Performance HUD Diagnostics
+            diag = camera_mouse_controller.get_diagnostics()
+            if hasattr(self, "lbl_cm_latency") and self.lbl_cm_latency.winfo_exists():
+                lat = diag.get("estimated_latency_ms", 0.0)
+                self.lbl_cm_latency.configure(text=f"LATENCY: {lat}ms")
+
+            if hasattr(self, "lbl_cm_jitter") and self.lbl_cm_jitter.winfo_exists():
+                jit = diag.get("measured_jitter_px", 0.0)
+                self.lbl_cm_jitter.configure(text=f"JITTER: {jit}px")
+
+            if hasattr(self, "lbl_cm_rate") and self.lbl_cm_rate.winfo_exists():
+                rate = diag.get("cursor_update_rate", 0.0)
+                self.lbl_cm_rate.configure(text=f"RATE: {rate}Hz")
         except Exception:
             pass
 
@@ -1160,6 +1187,124 @@ class VedaApp(ctk.CTk):
                 self.add_message("Webcam activated with live preview.", sender="assistant", animate=False)
             else:
                 self.add_message(f"Could not activate webcam: {camera_subsystem.state}", sender="assistant", animate=False)
+
+    def open_camera_mouse_calibration_modal(self):
+        """Interactive live Camera Mouse calibration modal with target points and telemetry verification."""
+        modal = ctk.CTkToplevel(self)
+        modal.title("V.E.D.A. — Camera Mouse Precision Calibration")
+        modal.geometry("460x420")
+        modal.minsize(420, 380)
+        modal.attributes("-topmost", True)
+        modal.configure(fg_color="#07090e")
+
+        box = ctk.CTkFrame(modal, fg_color="#0b101b", corner_radius=10, border_width=1, border_color="#10b981")
+        box.pack(fill="both", expand=True, padx=10, pady=10)
+
+        ctk.CTkLabel(box, text="🎯 CAMERA MOUSE CALIBRATION", font=ctk.CTkFont(family="Consolas", size=13, weight="bold"), text_color="#10b981").pack(anchor="w", padx=12, pady=(10, 4))
+        ctk.CTkLabel(box, text="Follow the guided steps below while camera mouse is active:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#94a3b8").pack(anchor="w", padx=12, pady=(0, 8))
+
+        steps_card = ctk.CTkFrame(box, fg_color="#05080e", corner_radius=6, border_width=1, border_color="#161f30")
+        steps_card.pack(fill="x", padx=12, pady=(0, 8))
+
+        guide_text = (
+            "1. Move index fingertip to screen CENTER\n"
+            "2. Sweep smoothly to all 4 CORNERS (Top-L, Top-R, Bottom-L, Bottom-R)\n"
+            "3. Pinch Thumb + Index to test LEFT CLICK (<100ms)\n"
+            "4. Hold Pinch for 0.5s to test DRAG\n"
+            "5. Extend Index + Middle for RIGHT CLICK\n"
+            "6. Open entire Palm to test PAUSE\n"
+            "7. Press ESC at any time for EMERGENCY STOP"
+        )
+        ctk.CTkLabel(steps_card, text=guide_text, font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1", justify="left").pack(anchor="w", padx=10, pady=8)
+
+        # Real-time Telemetry Monitor Card
+        telem_box = ctk.CTkFrame(box, fg_color="#070b12", corner_radius=6, border_width=1, border_color="#1e293b")
+        telem_box.pack(fill="x", padx=12, pady=(0, 10))
+
+        lbl_telem_status = ctk.CTkLabel(telem_box, text="Engine Status: ...", font=ctk.CTkFont(family="Consolas", size=10, weight="bold"), text_color="#38bdf8")
+        lbl_telem_status.pack(anchor="w", padx=10, pady=(6, 2))
+
+        lbl_telem_metrics = ctk.CTkLabel(telem_box, text="Precision: Reading...\nJitter: Reading...\nInput Latency: Reading...", font=ctk.CTkFont(family="Consolas", size=10), text_color="#94a3b8", justify="left")
+        lbl_telem_metrics.pack(anchor="w", padx=10, pady=(0, 6))
+
+        def _update_calibration_tick():
+            if not modal.winfo_exists():
+                return
+            diag = camera_mouse_controller.get_diagnostics()
+            is_on = diag.get("active", False)
+            st_text = f"Engine: {'ACTIVE (Tracking)' if is_on else 'OFF (Activate from Camera preview)'} | Gesture: {diag.get('last_gesture', 'NONE')}"
+            lbl_telem_status.configure(text=st_text, text_color="#10b981" if is_on else "#eab308")
+
+            fps = diag.get("tracking_fps", 0.0)
+            lat = diag.get("estimated_latency_ms", 0.0)
+            jit = diag.get("measured_jitter_px", 0.0)
+            rate = diag.get("cursor_update_rate", 0.0)
+            res = diag.get("resolution", "640x480")
+
+            m_text = (
+                f"• Tracking FPS:        {fps} FPS ({res})\n"
+                f"• Cursor Update Rate:  {rate} Hz\n"
+                f"• Estimated Latency:   {lat} ms (Frame Capture to SendInput)\n"
+                f"• Measured Jitter:     {jit} px RMS (Stationary finger)\n"
+                f"• Landmark Confidence: {int(diag.get('landmark_confidence', 0)*100)}%"
+            )
+            lbl_telem_metrics.configure(text=m_text)
+            modal.after(100, _update_calibration_tick)
+
+        modal.after(150, _update_calibration_tick)
+
+        btn_row = ctk.CTkFrame(box, fg_color="transparent")
+        btn_row.pack(fill="x", padx=12, pady=(0, 6))
+        ctk.CTkButton(btn_row, text="Close", width=70, height=26, font=ctk.CTkFont(family="Consolas", size=10), fg_color="#1e293b", hover_color="#334155", command=modal.destroy).pack(side="right")
+
+    def open_camera_mouse_benchmark_modal(self):
+        """Runs the automated precision & latency benchmark suite and displays actual measurements."""
+        modal = ctk.CTkToplevel(self)
+        modal.title("V.E.D.A. — Camera Mouse Performance Test")
+        modal.geometry("480x420")
+        modal.minsize(440, 380)
+        modal.attributes("-topmost", True)
+        modal.configure(fg_color="#07090e")
+
+        box = ctk.CTkFrame(modal, fg_color="#0b101b", corner_radius=10, border_width=1, border_color="#38bdf8")
+        box.pack(fill="both", expand=True, padx=10, pady=10)
+
+        ctk.CTkLabel(box, text="⚡ CAMERA MOUSE PERFORMANCE BENCHMARK", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"), text_color="#38bdf8").pack(anchor="w", padx=12, pady=(10, 4))
+        ctk.CTkLabel(box, text="Quantitative test suite measuring 1€ filter latency, stationary jitter, and click success.", font=ctk.CTkFont(family="Consolas", size=10), text_color="#94a3b8").pack(anchor="w", padx=12, pady=(0, 8))
+
+        res_card = ctk.CTkFrame(box, fg_color="#05080e", corner_radius=6, border_width=1, border_color="#161f30")
+        res_card.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+        lbl_res = ctk.CTkLabel(res_card, text="Executing benchmark suite...", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1", justify="left")
+        lbl_res.pack(anchor="w", padx=10, pady=10)
+
+        def _run_test_async():
+            suite_res = camera_mouse_controller.run_benchmark_suite()
+            txt = (
+                f"====================================================\n"
+                f" TEST 1: 1€ FILTER STEP RESPONSE & SETTLE TIME\n"
+                f"   • Settle Latency:          {suite_res.get('filter_step_settle_ms', 0)} ms\n\n"
+                f" TEST 2: STATIONARY JITTER RMS SUPPRESSION\n"
+                f"   • Raw Synthetic Jitter:    {suite_res.get('raw_jitter_rms', 0)} px\n"
+                f"   • Filtered Output Jitter:  {suite_res.get('filtered_jitter_rms', 0)} px\n"
+                f"   • Jitter Suppression:     {suite_res.get('jitter_reduction_percent', 0)}%\n\n"
+                f" TEST 3: GESTURE STATE MACHINE (PINCH CLICK)\n"
+                f"   • Clicks Attempted:        {suite_res.get('benchmark_clicks_attempted', 20)}\n"
+                f"   • Clicks Confirmed:        {suite_res.get('benchmark_clicks_detected', 0)}\n"
+                f"   • Click Recognition Rate:  {suite_res.get('click_success_rate', '0%')}\n"
+                f"   • Mean Recognition Window: {suite_res.get('avg_click_recognition_ms', 0)} ms\n"
+                f"   • 95th Percentile Window:  {suite_res.get('p95_click_recognition_ms', 0)} ms\n"
+                f"===================================================="
+            )
+            if modal.winfo_exists():
+                lbl_res.configure(text=txt, text_color="#10b981")
+
+        threading.Thread(target=_run_test_async, daemon=True).start()
+
+        btn_row = ctk.CTkFrame(box, fg_color="transparent")
+        btn_row.pack(fill="x", padx=12, pady=(0, 6))
+        ctk.CTkButton(btn_row, text="Run Again", width=80, height=26, font=ctk.CTkFont(family="Consolas", size=10), fg_color="#0284c7", hover_color="#0369a1", text_color="#ffffff", command=_run_test_async).pack(side="left")
+        ctk.CTkButton(btn_row, text="Close", width=70, height=26, font=ctk.CTkFont(family="Consolas", size=10), fg_color="#1e293b", hover_color="#334155", command=modal.destroy).pack(side="right")
 
     def _start_ambient_glow(self):
         """Dynamic pulsing breathing animation on status pill and border accents."""
@@ -3519,7 +3664,7 @@ class VedaApp(ctk.CTk):
         
         cm_hdr = ctk.CTkFrame(card_cam_mouse, fg_color="transparent")
         cm_hdr.pack(fill="x", padx=12, pady=(10, 4))
-        ctk.CTkLabel(cm_hdr, text="✋ Offline Camera Mouse Control (2-Core CPU)", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"), text_color="#38bdf8").pack(side="left")
+        ctk.CTkLabel(cm_hdr, text="✋ Ultra-Low-Latency Camera Mouse Engine", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"), text_color="#38bdf8").pack(side="left")
         
         cm_status_badge = ctk.CTkLabel(cm_hdr, text="[ACTIVE]" if camera_mouse_controller.is_active else "[OFF]", font=ctk.CTkFont(family="Consolas", size=11, weight="bold"), text_color="#10b981" if camera_mouse_controller.is_active else "#64748b")
         cm_status_badge.pack(side="right")
@@ -3529,55 +3674,73 @@ class VedaApp(ctk.CTk):
         
         cm_diag = camera_mouse_controller.get_diagnostics()
         cm_desc = (
-            f"• Tracking Engine:   MediaPipe Tasks (TFLite XNNPACK CPU-Only)\n"
-            f"• Privacy / Network: 100% Offline (Strictly in-RAM, 0 disk writes)\n"
-            f"• CPU Mode:          {cm_diag['cpu_mode']}\n"
-            f"• Emergency Stop:    Press ESC at any time to immediately disable"
+            f"• Architecture:      Decoupled Latest-Frame-Wins Asynchronous Pipeline\n"
+            f"• Cursor Filter:     One Euro Adaptive Filter (1€) + Velocity Micro-Prediction\n"
+            f"• Windows Output:    Direct Native SendInput (Virtual Desktop Multi-Monitor)\n"
+            f"• Gesture Engine:    Scale-Invariant Pinch Hysteresis State Machine (<100ms click)\n"
+            f"• Emergency Stop:    Press ESC at any time to immediately release and halt"
         )
-        lbl_cm_desc = ctk.CTkLabel(cm_box, text=cm_desc, font=ctk.CTkFont(family="Consolas", size=11), text_color="#94a3b8", justify="left")
+        lbl_cm_desc = ctk.CTkLabel(cm_box, text=cm_desc, font=ctk.CTkFont(family="Consolas", size=10), text_color="#94a3b8", justify="left")
         lbl_cm_desc.pack(anchor="w", padx=10, pady=8)
 
-        # Sensitivity & Smoothing Sliders Row
-        slider_row = ctk.CTkFrame(card_cam_mouse, fg_color="transparent")
-        slider_row.pack(fill="x", padx=12, pady=(2, 6))
+        # Controls Grid Row 1: Sensitivity & Prediction
+        slider_row1 = ctk.CTkFrame(card_cam_mouse, fg_color="transparent")
+        slider_row1.pack(fill="x", padx=12, pady=(2, 4))
 
-        ctk.CTkLabel(slider_row, text="Sensitivity:", font=ctk.CTkFont(family="Consolas", size=11), text_color="#cbd5e1").pack(side="left", padx=(0, 6))
-        sl_sens = ctk.CTkSlider(slider_row, from_=1.0, to=3.0, number_of_steps=20, width=120)
+        ctk.CTkLabel(slider_row1, text="Sensitivity:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
+        sl_sens = ctk.CTkSlider(slider_row1, from_=1.0, to=3.0, number_of_steps=20, width=100)
         sl_sens.set(camera_mouse_controller.sensitivity)
-        sl_sens.pack(side="left", padx=(0, 15))
-        lbl_sens_val = ctk.CTkLabel(slider_row, text=f"{camera_mouse_controller.sensitivity:.1f}x", font=ctk.CTkFont(family="Consolas", size=10, weight="bold"), text_color="#38bdf8", width=35)
-        lbl_sens_val.pack(side="left", padx=(0, 15))
+        sl_sens.pack(side="left", padx=(0, 4))
+        lbl_sens_val = ctk.CTkLabel(slider_row1, text=f"{camera_mouse_controller.sensitivity:.1f}x", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=30)
+        lbl_sens_val.pack(side="left", padx=(0, 10))
         sl_sens.configure(command=lambda v: (setattr(camera_mouse_controller, "sensitivity", round(v, 2)), lbl_sens_val.configure(text=f"{v:.1f}x"), VedaConfig.update_setting("camera_mouse_sensitivity", round(v, 2))))
 
-        ctk.CTkLabel(slider_row, text="Smoothing:", font=ctk.CTkFont(family="Consolas", size=11), text_color="#cbd5e1").pack(side="left", padx=(0, 6))
-        sl_smooth = ctk.CTkSlider(slider_row, from_=0.2, to=0.8, number_of_steps=12, width=100)
-        sl_smooth.set(camera_mouse_controller.smoothing)
-        sl_smooth.pack(side="left", padx=(0, 8))
-        lbl_sm_val = ctk.CTkLabel(slider_row, text=f"{camera_mouse_controller.smoothing:.2f}", font=ctk.CTkFont(family="Consolas", size=10, weight="bold"), text_color="#38bdf8", width=35)
-        lbl_sm_val.pack(side="left")
-        sl_smooth.configure(command=lambda v: (setattr(camera_mouse_controller, "smoothing", round(v, 2)), lbl_sm_val.configure(text=f"{v:.2f}"), VedaConfig.update_setting("camera_mouse_smoothing", round(v, 2))))
+        ctk.CTkLabel(slider_row1, text="Prediction:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
+        sl_pred = ctk.CTkSlider(slider_row1, from_=0.0, to=0.04, number_of_steps=20, width=100)
+        sl_pred.set(camera_mouse_controller.prediction_factor)
+        sl_pred.pack(side="left", padx=(0, 4))
+        lbl_pred_val = ctk.CTkLabel(slider_row1, text=f"{camera_mouse_controller.prediction_factor*1000:.0f}ms", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=35)
+        lbl_pred_val.pack(side="left")
+        sl_pred.configure(command=lambda v: (setattr(camera_mouse_controller, "prediction_factor", round(v, 4)), lbl_pred_val.configure(text=f"{v*1000:.0f}ms"), VedaConfig.update_setting("camera_mouse_prediction", round(v, 4))))
+
+        # Controls Grid Row 2: Jitter Suppression & Click Debounce
+        slider_row2 = ctk.CTkFrame(card_cam_mouse, fg_color="transparent")
+        slider_row2.pack(fill="x", padx=12, pady=(2, 6))
+
+        ctk.CTkLabel(slider_row2, text="Jitter Filter:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
+        sl_dead = ctk.CTkSlider(slider_row2, from_=0.001, to=0.010, number_of_steps=18, width=100)
+        sl_dead.set(camera_mouse_controller.deadzone)
+        sl_dead.pack(side="left", padx=(0, 4))
+        lbl_dead_val = ctk.CTkLabel(slider_row2, text=f"{camera_mouse_controller.deadzone*1000:.1f}", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=30)
+        lbl_dead_val.pack(side="left", padx=(0, 10))
+        sl_dead.configure(command=lambda v: (setattr(camera_mouse_controller, "deadzone", round(v, 4)), lbl_dead_val.configure(text=f"{v*1000:.1f}"), VedaConfig.update_setting("camera_mouse_deadzone", round(v, 4))))
+
+        ctk.CTkLabel(slider_row2, text="Click Debounce:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
+        debounce_menu = ctk.CTkOptionMenu(
+            slider_row2,
+            values=["Low (0.15s)", "Medium (0.25s)", "High (0.40s)"],
+            width=110,
+            height=22,
+            font=ctk.CTkFont(family="Consolas", size=9),
+            command=lambda choice: (
+                setattr(camera_mouse_controller.gesture_machine, "click_debounce", 0.15 if "Low" in choice else 0.40 if "High" in choice else 0.25),
+                VedaConfig.update_setting("camera_mouse_click_debounce", 0.15 if "Low" in choice else 0.40 if "High" in choice else 0.25)
+            )
+        )
+        debounce_menu.set("Medium (0.25s)")
+        debounce_menu.pack(side="left")
 
         # Buttons row
         cm_btn_row = ctk.CTkFrame(card_cam_mouse, fg_color="transparent")
-        cm_btn_row.pack(fill="x", padx=12, pady=(2, 10))
+        cm_btn_row.pack(fill="x", padx=12, pady=(4, 10))
 
         def _toggle_cm_settings():
             self.toggle_camera_mouse()
             cm_status_badge.configure(text="[ACTIVE]" if camera_mouse_controller.is_active else "[OFF]", text_color="#10b981" if camera_mouse_controller.is_active else "#64748b")
 
-        ctk.CTkButton(cm_btn_row, text="✋ Toggle Camera Mouse", font=ctk.CTkFont(family="Consolas", size=11, weight="bold"), fg_color="#0284c7", hover_color="#0369a1", text_color="#ffffff", height=28, command=_toggle_cm_settings).pack(side="left", padx=(0, 8))
-
-        lbl_cm_test_res = ctk.CTkLabel(card_cam_mouse, text="", font=ctk.CTkFont(family="Consolas", size=10), text_color="#94a3b8")
-        lbl_cm_test_res.pack(anchor="w", padx=12, pady=(0, 4))
-
-        def _test_cm_offline():
-            diag = camera_mouse_controller.get_diagnostics()
-            if diag["model_exists"]:
-                lbl_cm_test_res.configure(text=f"✓ Model verified offline: {os.path.basename(diag['model_path'])} | Resolution: {diag['resolution']} | CPU: 2-Core Optimized", text_color="#10b981")
-            else:
-                lbl_cm_test_res.configure(text=f"✕ Model asset missing at {diag['model_path']}", text_color="#ef4444")
-
-        ctk.CTkButton(cm_btn_row, text="🔍 Test Offline Tracker", font=ctk.CTkFont(family="Consolas", size=11), fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8", height=28, command=_test_cm_offline).pack(side="left")
+        ctk.CTkButton(cm_btn_row, text="✋ Toggle Camera Mouse", font=ctk.CTkFont(family="Consolas", size=10, weight="bold"), fg_color="#0284c7", hover_color="#0369a1", text_color="#ffffff", height=26, command=_toggle_cm_settings).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(cm_btn_row, text="🎯 Calibrate", font=ctk.CTkFont(family="Consolas", size=10, weight="bold"), fg_color="#1e293b", hover_color="#334155", text_color="#10b981", height=26, command=self.open_camera_mouse_calibration_modal).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(cm_btn_row, text="⚡ Performance Test", font=ctk.CTkFont(family="Consolas", size=10, weight="bold"), fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8", height=26, command=self.open_camera_mouse_benchmark_modal).pack(side="left")
 
         # Live Screen card
         card_scr = ctk.CTkFrame(scroll_hw, fg_color="#080c14", corner_radius=8, border_width=1, border_color="#1e293b")
