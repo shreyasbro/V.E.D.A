@@ -988,6 +988,9 @@ class VedaApp(ctk.CTk):
         self.lbl_cm_jitter = ctk.CTkLabel(cm_hud_row, text="JITTER: -- px", font=ctk.CTkFont(family="Consolas", size=8), text_color="#94a3b8")
         self.lbl_cm_jitter.pack(side="left", padx=6, pady=1)
 
+        self.lbl_cm_cursor_pos = ctk.CTkLabel(cm_hud_row, text="CURSOR: (0, 0)", font=ctk.CTkFont(family="Consolas", size=8), text_color="#38bdf8")
+        self.lbl_cm_cursor_pos.pack(side="left", padx=6, pady=1)
+
         self.lbl_cm_rate = ctk.CTkLabel(cm_hud_row, text="RATE: -- Hz", font=ctk.CTkFont(family="Consolas", size=8), text_color="#94a3b8")
         self.lbl_cm_rate.pack(side="right", padx=6, pady=1)
 
@@ -1208,6 +1211,11 @@ class VedaApp(ctk.CTk):
             if hasattr(self, "lbl_cm_jitter") and self.lbl_cm_jitter.winfo_exists():
                 jit = diag.get("measured_jitter_px", 0.0)
                 self.lbl_cm_jitter.configure(text=f"JITTER: {jit}px")
+
+            if hasattr(self, "lbl_cm_cursor_pos") and self.lbl_cm_cursor_pos.winfo_exists():
+                cx = diag.get("cursor_screen_x", 0)
+                cy = diag.get("cursor_screen_y", 0)
+                self.lbl_cm_cursor_pos.configure(text=f"POS: ({cx}, {cy})")
 
             if hasattr(self, "lbl_cm_rate") and self.lbl_cm_rate.winfo_exists():
                 rate = diag.get("cursor_update_rate", 0.0)
@@ -3740,7 +3748,7 @@ class VedaApp(ctk.CTk):
         lbl_cm_desc = ctk.CTkLabel(cm_box, text=cm_desc, font=ctk.CTkFont(family="Consolas", size=10), text_color="#94a3b8", justify="left")
         lbl_cm_desc.pack(anchor="w", padx=10, pady=8)
 
-        # Controls Grid Row 1: Sensitivity & Prediction
+        # Controls Grid Row 1: Sensitivity & Smoothing
         slider_row1 = ctk.CTkFrame(card_cam_mouse, fg_color="transparent")
         slider_row1.pack(fill="x", padx=12, pady=(2, 4))
 
@@ -3752,25 +3760,25 @@ class VedaApp(ctk.CTk):
         lbl_sens_val.pack(side="left", padx=(0, 10))
         sl_sens.configure(command=lambda v: (setattr(camera_mouse_controller, "sensitivity", round(v, 2)), lbl_sens_val.configure(text=f"{v:.1f}x"), VedaConfig.update_setting("camera_mouse_sensitivity", round(v, 2))))
 
-        ctk.CTkLabel(slider_row1, text="Prediction:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
-        sl_pred = ctk.CTkSlider(slider_row1, from_=0.0, to=0.04, number_of_steps=20, width=100)
-        sl_pred.set(camera_mouse_controller.prediction_factor)
-        sl_pred.pack(side="left", padx=(0, 4))
-        lbl_pred_val = ctk.CTkLabel(slider_row1, text=f"{camera_mouse_controller.prediction_factor*1000:.0f}ms", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=35)
-        lbl_pred_val.pack(side="left")
-        sl_pred.configure(command=lambda v: (setattr(camera_mouse_controller, "prediction_factor", round(v, 4)), lbl_pred_val.configure(text=f"{v*1000:.0f}ms"), VedaConfig.update_setting("camera_mouse_prediction", round(v, 4))))
+        ctk.CTkLabel(slider_row1, text="Smoothing:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
+        sl_smooth = ctk.CTkSlider(slider_row1, from_=0.1, to=1.0, number_of_steps=18, width=100)
+        sl_smooth.set(camera_mouse_controller.smoothing)
+        sl_smooth.pack(side="left", padx=(0, 4))
+        lbl_smooth_val = ctk.CTkLabel(slider_row1, text=f"{camera_mouse_controller.smoothing:.2f}", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=35)
+        lbl_smooth_val.pack(side="left")
+        sl_smooth.configure(command=lambda v: (setattr(camera_mouse_controller, "smoothing", round(v, 2)), lbl_smooth_val.configure(text=f"{v:.2f}"), VedaConfig.update_setting("camera_mouse_smoothing", round(v, 2))))
 
-        # Controls Grid Row 2: Adaptive Dead-Zone & Pinch Sensitivity
+        # Controls Grid Row 2: Dead-Zone (0% - 15%) & Pinch Sensitivity
         slider_row2 = ctk.CTkFrame(card_cam_mouse, fg_color="transparent")
         slider_row2.pack(fill="x", padx=12, pady=(2, 4))
 
         ctk.CTkLabel(slider_row2, text="Dead-Zone:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
-        sl_dead = ctk.CTkSlider(slider_row2, from_=1.0, to=8.0, number_of_steps=28, width=100)
-        sl_dead.set(camera_mouse_controller.deadzone_px)
+        sl_dead = ctk.CTkSlider(slider_row2, from_=0.0, to=15.0, number_of_steps=30, width=100)
+        sl_dead.set(camera_mouse_controller.deadzone_percent)
         sl_dead.pack(side="left", padx=(0, 4))
-        lbl_dead_val = ctk.CTkLabel(slider_row2, text=f"{camera_mouse_controller.deadzone_px:.1f}px", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=35)
+        lbl_dead_val = ctk.CTkLabel(slider_row2, text=f"{camera_mouse_controller.deadzone_percent:.1f}%", font=ctk.CTkFont(family="Consolas", size=9, weight="bold"), text_color="#38bdf8", width=35)
         lbl_dead_val.pack(side="left", padx=(0, 10))
-        sl_dead.configure(command=lambda v: (setattr(camera_mouse_controller, "deadzone_px", round(v, 1)), lbl_dead_val.configure(text=f"{v:.1f}px"), VedaConfig.update_setting("camera_mouse_deadzone_px", round(v, 1))))
+        sl_dead.configure(command=lambda v: (setattr(camera_mouse_controller, "deadzone_percent", round(v, 1)), lbl_dead_val.configure(text=f"{v:.1f}%"), VedaConfig.update_setting("camera_mouse_deadzone_percent", round(v, 1))))
 
         ctk.CTkLabel(slider_row2, text="Pinch Sens:", font=ctk.CTkFont(family="Consolas", size=10), text_color="#cbd5e1").pack(side="left", padx=(0, 4))
         sl_pinch = ctk.CTkSlider(slider_row2, from_=0.7, to=1.4, number_of_steps=14, width=100)

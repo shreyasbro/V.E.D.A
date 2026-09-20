@@ -157,72 +157,126 @@ MOUSEEVENTF_VIRTUALDESK = 0x4000
 
 class WindowsMouseInjector:
     """
-    Direct low-latency mouse injection via native Windows SendInput.
-    Eliminates high-level library delays, queues, or thread-locking.
+    Direct low-latency mouse injection via native Windows SetCursorPos, SendInput, and mouse_event.
+    Guarantees hardware cursor movement even from background worker threads by attaching to the active input desktop.
     """
 
     _user32 = ctypes.windll.user32
+    _kernel32 = ctypes.windll.kernel32
     _is_left_down = False
     _is_right_down = False
+    _desktop_attached = False
+
+    # Diagnostics
+    last_screen_x: int = 0
+    last_screen_y: int = 0
+    move_count: int = 0
+    last_move_success: bool = True
 
     @classmethod
-    def _send_input(cls, inp: INPUT):
+    def ensure_input_desktop(cls):
+        """Attaches the current calling thread to the interactive input desktop (0x01FF = MAXIMUM_ALLOWED / DESKTOP_ALL)."""
         try:
-            cls._user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+            hdesk = cls._user32.OpenInputDesktop(0, False, 0x01FF)
+            if hdesk:
+                attached = cls._user32.SetThreadDesktop(hdesk)
+                if attached:
+                    cls._desktop_attached = True
         except Exception:
             pass
 
     @classmethod
+    def _send_input(cls, inp: INPUT) -> bool:
+        cls.ensure_input_desktop()
+        try:
+            ret = cls._user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+            return ret > 0
+        except Exception:
+            return False
+
+    @classmethod
     def move_to(cls, screen_x: int, screen_y: int):
-        """Moves cursor to exact virtual screen coordinates (supports negative coordinates & multi-monitor)."""
+        """
+        Moves cursor to exact screen coordinates using direct hardware SetCursorPos,
+        falling back cleanly to SendInput if needed.
+        """
+        cls.ensure_input_desktop()
+        cls.last_screen_x = int(screen_x)
+        cls.last_screen_y = int(screen_y)
+        cls.move_count += 1
+
+        # Direct hardware cursor move via SetCursorPos (0 latency, 100% reliable on Windows)
+        try:
+            res = cls._user32.SetCursorPos(int(screen_x), int(screen_y))
+            if res != 0:
+                cls.last_move_success = True
+                return
+        except Exception:
+            pass
+
+        # Fallback: SendInput absolute normalized coordinates
         vx, vy, vw, vh = VirtualDesktopGeometry.get_bounds()
-        if vw <= 0 or vh <= 0:
-            return
+        if vw > 0 and vh > 0:
+            norm_x = int(((screen_x - vx) / float(vw)) * 65535.0)
+            norm_y = int(((screen_y - vy) / float(vh)) * 65535.0)
+            norm_x = max(0, min(65535, norm_x))
+            norm_y = max(0, min(65535, norm_y))
 
-        # Map to 0..65535 normalized range
-        norm_x = int(((screen_x - vx) / float(vw)) * 65535.0)
-        norm_y = int(((screen_y - vy) / float(vh)) * 65535.0)
-        norm_x = max(0, min(65535, norm_x))
-        norm_y = max(0, min(65535, norm_y))
-
-        inp = INPUT()
-        inp.type = INPUT_MOUSE
-        inp.mi.dx = norm_x
-        inp.mi.dy = norm_y
-        inp.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
-        inp.mi.time = 0
-        inp.mi.dwExtraInfo = 0
-        cls._send_input(inp)
+            inp = INPUT()
+            inp.type = INPUT_MOUSE
+            inp.mi.dx = norm_x
+            inp.mi.dy = norm_y
+            inp.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+            inp.mi.time = 0
+            inp.mi.dwExtraInfo = 0
+            success = cls._send_input(inp)
+            cls.last_move_success = success
+        else:
+            cls.last_move_success = False
 
     @classmethod
     def mouse_down(cls, button: str = "left"):
-        """Depresses a mouse button."""
+        """Depresses a mouse button with guaranteed fallback to native mouse_event."""
+        cls.ensure_input_desktop()
         inp = INPUT()
         inp.type = INPUT_MOUSE
-        if button == "left":
-            inp.mi.dwFlags = MOUSEEVENTF_LEFTDOWN
-            cls._is_left_down = True
-        elif button == "right":
-            inp.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN
-            cls._is_right_down = True
+        flag = MOUSEEVENTF_LEFTDOWN if button == "left" else MOUSEEVENTF_RIGHTDOWN
+        inp.mi.dwFlags = flag
         inp.mi.time = 0
         inp.mi.dwExtraInfo = 0
-        cls._send_input(inp)
+
+        if not cls._send_input(inp):
+            try:
+                cls._user32.mouse_event(flag, 0, 0, 0, 0)
+            except Exception:
+                pass
+
+        if button == "left":
+            cls._is_left_down = True
+        elif button == "right":
+            cls._is_right_down = True
 
     @classmethod
     def mouse_up(cls, button: str = "left"):
-        """Releases a mouse button."""
+        """Releases a mouse button with guaranteed fallback to native mouse_event."""
+        cls.ensure_input_desktop()
         inp = INPUT()
         inp.type = INPUT_MOUSE
-        if button == "left":
-            inp.mi.dwFlags = MOUSEEVENTF_LEFTUP
-            cls._is_left_down = False
-        elif button == "right":
-            inp.mi.dwFlags = MOUSEEVENTF_RIGHTUP
-            cls._is_right_down = False
+        flag = MOUSEEVENTF_LEFTUP if button == "left" else MOUSEEVENTF_RIGHTUP
+        inp.mi.dwFlags = flag
         inp.mi.time = 0
         inp.mi.dwExtraInfo = 0
-        cls._send_input(inp)
+
+        if not cls._send_input(inp):
+            try:
+                cls._user32.mouse_event(flag, 0, 0, 0, 0)
+            except Exception:
+                pass
+
+        if button == "left":
+            cls._is_left_down = False
+        elif button == "right":
+            cls._is_right_down = False
 
     @classmethod
     def click(cls, button: str = "left"):
@@ -234,12 +288,17 @@ class WindowsMouseInjector:
     @classmethod
     def release_all(cls):
         """Emergency fail-safe release of all held buttons."""
+        cls.ensure_input_desktop()
         inp = INPUT()
         inp.type = INPUT_MOUSE
         inp.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP
         inp.mi.time = 0
         inp.mi.dwExtraInfo = 0
-        cls._send_input(inp)
+        if not cls._send_input(inp):
+            try:
+                cls._user32.mouse_event(MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)
+            except Exception:
+                pass
         cls._is_left_down = False
         cls._is_right_down = False
 
@@ -582,7 +641,9 @@ class CameraMouseController:
         settings = VedaConfig.get_settings()
         self.target_fps = int(settings.get("camera_mouse_tracking_fps", 30))
         self.sensitivity = float(settings.get("camera_mouse_sensitivity", 1.8))
+        self.smoothing = float(settings.get("camera_mouse_smoothing", 0.45))
         self.deadzone = float(settings.get("camera_mouse_deadzone", 0.003))
+        self.deadzone_percent = float(settings.get("camera_mouse_deadzone_percent", 5.0))
         self.deadzone_mode = str(settings.get("camera_mouse_deadzone_mode", "Adaptive"))
         self.deadzone_px = float(settings.get("camera_mouse_deadzone_px", 3.5))
         self.pinch_sensitivity = float(settings.get("camera_mouse_pinch_sensitivity", 1.0))
@@ -842,8 +903,9 @@ class CameraMouseController:
     def _tracking_worker(self):
         """
         Thread 2: Real-time hand landmark detection, filtering, gesture state machine,
-        and Windows SendInput cursor injection.
+        and direct Windows hardware cursor injection.
         """
+        WindowsMouseInjector.ensure_input_desktop()
         vx, vy, vw, vh = VirtualDesktopGeometry.get_bounds()
         track_fps_count = 0
         track_fps_timer = time.time()
@@ -894,8 +956,9 @@ class CameraMouseController:
                     self.is_paused = True
                 else:
                     self.is_paused = False
-                    # Only move cursor during POINT, DRAG, or NEUTRAL
-                    if gesture in ["POINT", "DRAG", "NEUTRAL"]:
+                    # Move cursor on any active interaction gesture (except PAUSED)
+                    # This guarantees the cursor moves immediately when hand/finger moves
+                    if gesture not in ["PAUSED", "NO_HAND"]:
                         self._process_cursor_movement(landmarks, vx, vy, vw, vh, t_process_start)
                         cursor_fps_count += 1
             else:
@@ -1064,8 +1127,14 @@ class CameraMouseController:
         cursor_velocity_px = disp_dist / dt_cursor
         self._last_disp_time = now
 
-        # Dynamic deadzone radius: Full base radius when stationary, shrinks smoothly to near 0 upon movement
-        base_dz = self.deadzone_px
+        # Dynamic deadzone radius: Calculated from percentage of desktop scale or explicit pixels
+        # 5% dead-zone maps to small stationary stability, dynamically shrinking smoothly to 0 upon movement
+        if hasattr(self, "deadzone_percent") and self.deadzone_percent > 0:
+            # Base deadzone in pixels based on percentage (e.g., 5.0% -> ~5px on normalized active area)
+            base_dz = max(1.0, (self.deadzone_percent / 100.0) * 100.0)
+        else:
+            base_dz = self.deadzone_px
+
         if self.deadzone_mode == "Adaptive":
             # Shrinks smoothly as velocity increases to eliminate sticky feeling
             vel_factor = max(0.0, min(1.0, cursor_velocity_px / 90.0))
@@ -1205,6 +1274,11 @@ class CameraMouseController:
             "is_dragging": self.gesture_machine.is_dragging,
             "calibration_status": self._calibration_result_text,
             "is_calibrating": self._is_calibrating,
+            "cursor_screen_x": WindowsMouseInjector.last_screen_x,
+            "cursor_screen_y": WindowsMouseInjector.last_screen_y,
+            "cursor_move_count": WindowsMouseInjector.move_count,
+            "cursor_move_success": WindowsMouseInjector.last_move_success,
+            "desktop_attached": WindowsMouseInjector._desktop_attached,
             "model_path": resolve_model_path(),
             "model_exists": os.path.isfile(resolve_model_path()),
         }

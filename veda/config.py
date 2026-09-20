@@ -43,6 +43,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "camera_mouse_deadzone": 0.003,
         "camera_mouse_deadzone_mode": "Adaptive",
         "camera_mouse_deadzone_px": 3.5,
+        "camera_mouse_deadzone_percent": 5.0,
         "camera_mouse_pinch_sensitivity": 1.0,
         "camera_mouse_click_stability": "High",
         "camera_mouse_prediction": 0.015,
