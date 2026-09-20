@@ -221,6 +221,12 @@ class VedaApp(ctk.CTk):
         microphone_subsystem.on_interim_transcript = lambda text: self.after(0, lambda: self._on_interim_speech(text))
         tts_engine.on_speech_started = self._on_tts_start
         tts_engine.on_speech_finished = self._on_tts_finish
+        # Preview watchdog and telemetry
+        self._last_preview_frame_time: float = 0.0
+        self._preview_fps_counter: int = 0
+        self._preview_fps_timer: float = time.time()
+        self._preview_fps: float = 0.0
+
         camera_subsystem.on_state_change = self._on_camera_state_change
         camera_subsystem.on_frame_received = self._on_camera_frame_received
         camera_mouse_controller.on_preview_frame = lambda img, gest, det, fps: self.after(0, self._on_cam_mouse_preview_frame, img, gest, det, fps)
@@ -1014,8 +1020,17 @@ class VedaApp(ctk.CTk):
                     self.lbl_cm_tracking.configure(text="TRACKING: OFF", text_color="#64748b")
             else:
                 self.btn_panel_cam_mouse.configure(state="normal")
+                # Watchdog inspection
+                now = time.time()
+                time_since_frame = now - getattr(self, "_last_preview_frame_time", 0.0)
+                fps_disp = getattr(self, "_preview_fps", 0.0)
                 if hasattr(self, "lbl_cam_title") and self.lbl_cam_title.winfo_exists():
-                    self.lbl_cam_title.configure(text="📷 CAMERA [ON]", text_color="#10b981")
+                    if time_since_frame > 2.5 and getattr(self, "_last_preview_frame_time", 0.0) > 0:
+                        self.lbl_cam_title.configure(text="📷 CAMERA [STALLED]", text_color="#ef4444")
+                    elif fps_disp > 0:
+                        self.lbl_cam_title.configure(text=f"📷 CAMERA [LIVE {fps_disp:.0f} FPS]", text_color="#10b981")
+                    else:
+                        self.lbl_cam_title.configure(text="📷 CAMERA [LIVE]", text_color="#10b981")
                 if cm_active:
                     self.btn_panel_cam_mouse.configure(text="CAMERA MOUSE [ ON ]", fg_color="#059669", hover_color="#047857", text_color="#ffffff")
                     if hasattr(self, "lbl_cm_tracking") and self.lbl_cm_tracking.winfo_exists():
@@ -1046,6 +1061,14 @@ class VedaApp(ctk.CTk):
 
     def hide_camera_preview(self):
         """Safely hides and closes camera preview window."""
+        if hasattr(self, "camera_canvas_label") and self.camera_canvas_label is not None:
+            try:
+                self.camera_canvas_label._image = None
+                self.camera_canvas_label.image = None
+            except Exception:
+                pass
+            self.camera_canvas_label = None
+
         if hasattr(self, "camera_preview_win") and self.camera_preview_win is not None:
             try:
                 if self.camera_preview_win.winfo_exists():
@@ -1061,7 +1084,7 @@ class VedaApp(ctk.CTk):
         self._render_canvas_image(pil_img)
 
     def _render_canvas_image(self, pil_img: Image.Image):
-        """Maintains aspect ratio and renders image onto camera canvas."""
+        """Maintains aspect ratio and renders image onto camera canvas with reference retention."""
         if not hasattr(self, "camera_canvas_label") or self.camera_canvas_label is None:
             return
         try:
@@ -1070,15 +1093,33 @@ class VedaApp(ctk.CTk):
             w, h = pil_img.size
             if w <= 0 or h <= 0:
                 return
+
+            # Keep track of live preview health & FPS
+            now = time.time()
+            self._last_preview_frame_time = now
+            self._preview_fps_counter += 1
+            fps_elapsed = now - self._preview_fps_timer
+            if fps_elapsed >= 1.0:
+                self._preview_fps = round(self._preview_fps_counter / fps_elapsed, 1)
+                self._preview_fps_counter = 0
+                self._preview_fps_timer = now
+                self._update_cam_mouse_panel_state()
+
             target_w = 340
             target_h = int(target_w * (h / w))
             if target_h > 240:
                 target_h = 240
                 target_w = int(target_h * (w / h))
 
+            target_w = max(1, target_w)
+            target_h = max(1, target_h)
+
             display_img = pil_img.resize((target_w, target_h), Image.Resampling.BILINEAR)
             ctk_img = ctk.CTkImage(light_image=display_img, dark_image=display_img, size=(target_w, target_h))
             self.camera_canvas_label.configure(image=ctk_img, text="")
+            # Critical: Retain reference on the widget to prevent garbage collection blanking
+            self.camera_canvas_label._image = ctk_img
+            self.camera_canvas_label.image = ctk_img
         except Exception:
             pass
 
